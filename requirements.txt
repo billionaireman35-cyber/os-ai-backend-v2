@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+psycopg2-binary
+pydantic
+python-dotenv
+web3
+requests
+httpx
+bcrypt
+resend
+websockets
+safe-eth-py
