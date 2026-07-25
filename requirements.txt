@@ -4,7 +4,6 @@ psycopg2-binary==2.9.9
 pydantic==1.10.13
 python-dotenv==1.0.0
 web3==5.31.4
-eth-account==0.10.0
 requests==2.31.0
 httpx==0.25.1
 bcrypt==4.1.1
