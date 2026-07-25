@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 psycopg2-binary
-pydantic
+pydantic-settings
 python-dotenv
 web3
 requests
