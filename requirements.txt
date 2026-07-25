@@ -9,4 +9,4 @@ httpx
 bcrypt
 resend
 websockets
-safe-eth-py
+safe-eth-pypydantic-settings
