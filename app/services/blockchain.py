@@ -29,7 +29,7 @@ def get_wallet_lock(address: str):
 
 def send_raw_tx(web3, private_key, tx):
     signed = web3.eth.account.sign_transaction(tx, private_key)
-    return web3.eth.send_raw_transaction(signed.rawTransaction).hex()
+    return web3.eth.send_raw_transaction(getattr(signed, 'raw_transaction', None) or signed.rawTransaction).hex()
 
 def burn_close_onchain(wallet: str, private_key: str, amount: int) -> str:
     web3 = w3_polygon
