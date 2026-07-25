@@ -1,4 +1,3 @@
-
 import os
 from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -100,42 +99,4 @@ def get_safe_singleton(chain: str) -> str:
 
 
 def get_safe_proxy_factory(chain: str) -> str:
-<<<<<<< HEAD
     return SAFE_PROXY_FACTORY_ADDRESSES.get(chain)
-
-settings = Settings()
-# In Settings class
-ALCHEMY_API_KEY: str = ""
-
-def get_rpc_url(self, chain: str) -> str:
-    """Return Alchemy RPC URL for the given chain."""
-    if not self.ALCHEMY_API_KEY:
-        # Fallback to public RPCs (already defined)
-        return getattr(self, f"{chain.upper()}_RPC_URL", "")
-    alchemy_chain_map = {
-        "ethereum": "eth-mainnet",
-        "polygon": "polygon-mainnet",
-        "arbitrum": "arb-mainnet",
-        "base": "base-mainnet",
-        "bsc": "bsc-mainnet",  # Alchemy supports BSC?
-    }
-    # Alchemy does not support BSC natively; we fallback to public for BSC
-    if chain == "bsc":
-        return settings.BSC_RPC_URL
-    return f"https://{alchemy_chain_map.get(chain, 'eth-mainnet')}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}"
-
-# In Settings class
-ONEINCH_API_KEY: str = ""
-ONEINCH_BASE_URL: str = "https://business.1inch.com/swap/v5.0"  # business endpoint
-
-# Chain ID mapping for 1inch
-ONEINCH_CHAIN_IDS = {
-    "polygon": 137,
-    "ethereum": 1,
-    "bsc": 56,
-    "arbitrum": 42161,
-    "base": 8453,
-}
-=======
-    return SAFE_PROXY_FACTORY_ADDRESSES.get(chain)
->>>>>>> fc9350bd8b5eb3182df3fa3f36d37f4899ea2b6b
