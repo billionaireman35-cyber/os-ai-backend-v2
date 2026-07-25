@@ -78,6 +78,8 @@ SAFE_PROXY_FACTORY_ADDRESSES = {
     "base": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
 }
 
+ALLOWED_ORIGINS = ["https://os-ai-frontend-v2.pages.dev", "http://localhost:5173"]
+
 def get_safe_singleton(chain: str) -> str:
     return SAFE_SINGLETON_ADDRESSES.get(chain)
 
