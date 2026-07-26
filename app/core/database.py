@@ -137,6 +137,7 @@ def init_db():
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
+                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_close_transactions_reference ON close_transactions (reference_id)")
                 
                 c.execute("""
@@ -319,7 +320,6 @@ def init_db():
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
-                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
                 c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 
                 conn.commit()
