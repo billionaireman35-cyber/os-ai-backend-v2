@@ -1,17 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.security import get_current_user
 from app.core.database import get_db
-from app.services.safe import get_safe_contract, propose_safe_transaction
 from app.services.blockchain import broadcast_signed_transaction
-from app.core.config import settings
+from app.core.config import settings, get_safe_singleton, get_safe_proxy_factory
 import uuid
 import json
 import logging
 from datetime import datetime
 from safe_eth.eth import EthereumClient
 from safe_eth.safe import Safe
-from safe_eth.safe.transactions import SafeTx
-from safe_eth.safe.signatures import SafeSignature, SafeSignatureType
+from safe_eth.safe.safe_tx import SafeTx
+from safe_eth.safe.signatures import signatures_to_bytes
 from web3 import Web3
 import eth_account
 
@@ -21,6 +20,78 @@ logger = logging.getLogger(__name__)
 def get_web3(chain: str):
     rpc = settings.get_rpc_url(chain)
     return Web3(Web3.HTTPProvider(rpc))
+
+def get_ethereum_client(chain: str) -> EthereumClient:
+    return EthereumClient(settings.get_rpc_url(chain))
+
+def get_safe_contract(safe_address: str, chain: str) -> Safe:
+    """Load an existing deployed Safe as a Safe object."""
+    ethereum_client = get_ethereum_client(chain)
+    return Safe(Web3.to_checksum_address(safe_address), ethereum_client)
+
+def create_safe(owners: list, threshold: int, chain: str = "polygon") -> str:
+    """
+    Deploy a new Gnosis Safe on-chain with the given owners/threshold.
+    Uses the platform's distribution wallet to pay deployment gas.
+    Returns the deployed Safe's address.
+    """
+    ethereum_client = get_ethereum_client(chain)
+    deployer_account = eth_account.Account.from_key(settings.DISTRIBUTION_WALLET_PRIVATE_KEY)
+    master_copy_address = Web3.to_checksum_address(get_safe_singleton(chain))
+    proxy_factory_address = Web3.to_checksum_address(get_safe_proxy_factory(chain))
+    checksum_owners = [Web3.to_checksum_address(o) for o in owners]
+
+    tx_sent = Safe.create(
+        ethereum_client=ethereum_client,
+        deployer_account=deployer_account,
+        master_copy_address=master_copy_address,
+        owners=checksum_owners,
+        threshold=threshold,
+        proxy_factory_address=proxy_factory_address,
+    )
+    return tx_sent.contract_address
+
+def propose_safe_transaction(safe_address: str, to: str, value: int, data: str, chain: str = "polygon") -> dict:
+    """
+    Build (but do not execute) a Safe multisig transaction, returning its safe_tx_hash
+    so owners can sign it.
+    """
+    safe = get_safe_contract(safe_address, chain)
+    data_bytes = bytes.fromhex(data[2:]) if isinstance(data, str) and data.startswith("0x") else b""
+
+    safe_tx = safe.build_multisig_tx(
+        to=Web3.to_checksum_address(to),
+        value=int(value),
+        data=data_bytes,
+    )
+    safe_tx_hash = safe_tx.safe_tx_hash.hex()
+
+    return {
+        "safe_tx_hash": safe_tx_hash if safe_tx_hash.startswith("0x") else f"0x{safe_tx_hash}",
+        "to": to,
+        "value": str(value),
+        "data": data,
+    }
+
+def list_safes_for_user(user_id: str) -> list:
+    """Return all Safes owned/tracked for a given user."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT safe_address, chain, owners, threshold
+                FROM user_safes
+                WHERE user_id = %s
+            """, (user_id,))
+            rows = c.fetchall()
+    return [
+        {
+            "safe_address": r[0],
+            "chain": r[1],
+            "owners": r[2] if isinstance(r[2], list) else json.loads(r[2]),
+            "threshold": r[3],
+        }
+        for r in rows
+    ]
 
 @router.post("/propose")
 async def propose(req: dict, user=Depends(get_current_user)):
@@ -183,78 +254,40 @@ async def execute(req: dict, user=Depends(get_current_user)):
             # Set the safe_tx_hash (to verify we have the right hash)
             safe_tx_obj.safe_tx_hash = bytes.fromhex(safe_tx_hash.replace("0x", ""))
 
-            # Convert signatures to safe-eth-py format
-            sigs = []
-            for sig_obj in signatures:
-                signer_address = sig_obj["signer"]
-                sig_hex = sig_obj["signature"]  # should be hex string without 0x
-                # Parse signature: r (32 bytes), s (32 bytes), v (1 byte)
+            # Convert signatures to safe-eth-py format: list of (v, r, s) tuples,
+            # sorted by signer address ascending (required by the Safe contract).
+            sig_tuples = []
+            for sig_obj in sorted(signatures, key=lambda s: s["signer"].lower()):
+                sig_hex = sig_obj["signature"]  # hex string, with or without 0x
                 if sig_hex.startswith("0x"):
                     sig_hex = sig_hex[2:]
                 sig_bytes = bytes.fromhex(sig_hex)
                 if len(sig_bytes) != 65:
                     raise HTTPException(400, "Invalid signature length")
-                r = sig_bytes[:32]
-                s = sig_bytes[32:64]
+                r = int.from_bytes(sig_bytes[:32], "big")
+                s = int.from_bytes(sig_bytes[32:64], "big")
                 v = sig_bytes[64]
-                # Create SafeSignature
-                sig = SafeSignature(
-                    owner=signer_address,
-                    r=int.from_bytes(r, "big"),
-                    s=int.from_bytes(s, "big"),
-                    v=v,
-                    signature_type=SafeSignatureType.ETH_SIGN,  # message signing
-                )
-                sigs.append(sig)
+                sig_tuples.append((v, r, s))
 
-            # Combine signatures
-            safe_tx_obj.signatures = sigs
+            # Combine signatures into the packed bytes format the Safe contract expects
+            safe_tx_obj.signatures = signatures_to_bytes(sig_tuples)
 
             # Execute the transaction
             eth_client = EthereumClient(settings.get_rpc_url(chain))
-            # We'll get the execution transaction
             exec_tx = safe_tx_obj.get_execution_transaction(eth_client)
-            # Sign with the Safe's owner? No, the Safe itself will execute the transaction.
-            # Actually, we need to broadcast the execution transaction.
-            # The execution transaction is sent to the Safe contract's `execTransaction` method.
-            # We'll use the safe-eth-py method to send the transaction.
-            # We need to sign the execution transaction? The Safe executes it internally.
-            # We'll use the safe-eth-py to execute directly.
-            # First, we need to use the Safe contract instance to execute.
-            # We'll use the execute_tx method.
             safe_contract = get_safe_contract(safe_address, chain)
-            # We need to execute the transaction using the Safe contract.
-            # For simplicity, we'll use the safe-eth-py method to execute.
-            # However, safe-eth-py's execute_tx requires a signer (the owner) to execute.
-            # In a Safe, the execution is done by the Safe itself, not an owner.
-            # We'll create an execution transaction and broadcast it via the RPC.
-            # We'll use the web3.py to send the transaction.
             web3 = get_web3(chain)
             exec_tx_data = safe_tx_obj.get_execution_transaction_data()
-            # build transaction
             tx = {
                 "to": safe_address,
                 "data": exec_tx_data,
-                "gas": 500000,  # we need to estimate or fetch
+                "gas": 500000,
                 "gasPrice": web3.eth.gas_price,
                 "nonce": web3.eth.get_transaction_count(safe_address, 'pending'),
                 "chainId": settings.ONEINCH_CHAIN_IDS.get(chain, 137),
             }
-            # We cannot sign from the backend because we don't have the private key.
-            # The frontend must provide the signed execution transaction.
-            # So we'll return the exec_tx_data and let the frontend sign and broadcast.
-            # But this would be a mock if we don't broadcast.
-            # For a fully live solution, we need the frontend to send a signed transaction.
-            # However, the execution transaction is sent by the Safe itself, not an owner.
-            # Actually, the Safe contract allows any account to execute a valid transaction.
-            # So we can broadcast it using our backend's private key.
-            # But it's safer to have the user sign it.
-            # We'll provide the exec_tx_data and let the frontend sign and broadcast.
+            # Execution is deferred to the frontend, which signs and broadcasts exec_tx_data.
 
-            # For now, we'll return the exec_tx_data to the frontend.
-            # The frontend will then sign and broadcast.
-
-            # Update status to pending execution
             c.execute("UPDATE safe_transactions SET status = 'executing' WHERE id = %s", (tx_id,))
             conn.commit()
 
