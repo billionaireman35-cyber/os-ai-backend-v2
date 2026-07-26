@@ -6,7 +6,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Connection pool
 db_pool = None
 
 def get_db_pool():
@@ -37,13 +36,8 @@ def init_db():
     try:
         with get_db() as conn:
             with conn.cursor() as c:
-                # Enable pgvector extension
                 c.execute("CREATE EXTENSION IF NOT EXISTS vector")
-               # Ensure all columns exist (safe to run repeatedly)
-c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
-c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
-c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
+
                 # ========== USERS & AUTH ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -63,7 +57,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -73,7 +67,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS verification_codes (
                         email TEXT NOT NULL,
@@ -85,7 +79,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                     )
                 """)
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_email_purpose ON verification_codes (email, purpose)")
-                
+
                 # ========== CHAT & AI MEMORY ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS chats (
@@ -98,7 +92,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         updated TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS chat_messages (
                         id TEXT PRIMARY KEY,
@@ -112,7 +106,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS memories (
                         id TEXT PRIMARY KEY,
@@ -126,7 +120,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                     )
                 """)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_embedding ON memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);")
-                
+
                 # ========== TOKEN & FINANCE ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS close_transactions (
@@ -143,7 +137,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                 """)
                 c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_close_transactions_reference ON close_transactions (reference_id)")
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS revenue_logs (
                         id UUID PRIMARY KEY,
@@ -154,7 +148,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS admin_events (
                         id UUID PRIMARY KEY,
@@ -164,7 +158,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 # ========== GNOSIS SAFE ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS user_safes (
@@ -177,8 +171,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("CREATE INDEX idx_user_safes_user_id ON user_safes (user_id);")
-                
+                c.execute("CREATE INDEX IF NOT EXISTS idx_user_safes_user_id ON user_safes (user_id);")
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS safe_transactions (
                         id UUID PRIMARY KEY,
@@ -197,8 +191,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         executed_at TIMESTAMP
                     )
                 """)
-                c.execute("CREATE INDEX idx_safe_transactions_safe_address ON safe_transactions (safe_address)")
-                
+                c.execute("CREATE INDEX IF NOT EXISTS idx_safe_transactions_safe_address ON safe_transactions (safe_address)")
+
                 # ========== HUSTLE HUBS (WORKSPACES) ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS workspaces (
@@ -216,8 +210,11 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         updated_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_room_code ON workspaces (room_code)")
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS workspace_members (
                         workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -228,7 +225,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         PRIMARY KEY (workspace_id, user_id)
                     )
                 """)
-                
+                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS workspace_messages (
                         id UUID PRIMARY KEY,
@@ -239,8 +237,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("CREATE INDEX idx_workspace_messages_workspace ON workspace_messages (workspace_id, created_at)")
-                
+                c.execute("CREATE INDEX IF NOT EXISTS idx_workspace_messages_workspace ON workspace_messages (workspace_id, created_at)")
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS workspace_memories (
                         id UUID PRIMARY KEY,
@@ -251,7 +249,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS workspace_invites (
                         id UUID PRIMARY KEY,
@@ -262,7 +260,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 # ========== WALLETCONNECT SESSIONS ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS walletconnect_sessions (
@@ -277,8 +275,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("CREATE INDEX idx_walletconnect_sessions_user ON walletconnect_sessions (user_id)")
-                
+                c.execute("CREATE INDEX IF NOT EXISTS idx_walletconnect_sessions_user ON walletconnect_sessions (user_id)")
+
                 # ========== DEVELOPER TOOLS ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS api_keys (
@@ -293,8 +291,8 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("CREATE INDEX idx_api_keys_user ON api_keys (user_id)")
-                
+                c.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id)")
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS webhooks (
                         id UUID PRIMARY KEY,
@@ -305,7 +303,7 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
+
                 # ========== MULTI-CHAIN WALLETS ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS os_wallets (
@@ -319,20 +317,10 @@ c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEF
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                
-                # ========== SAFE COLUMN ADDITIONS (if missing) ==========
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
-                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-                
+
                 conn.commit()
-                
-        logger.info("✅ Database initialized successfully")
+
+        logger.info("Database initialized successfully")
     except Exception as e:
-        logger.error(f"❌ Database init error: {e}")
-        raise                # Ensure all columns exist (safe to run repeatedly)
-                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
-                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
+        logger.error(f"Database init error: {e}")
+        raise
