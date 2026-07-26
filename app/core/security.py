@@ -4,6 +4,7 @@ import json
 import base64
 import hashlib
 from datetime import datetime, timedelta, timezone
+from fastapi import Request
 from app.core.config import settings
 
 def now_utc():
@@ -49,8 +50,7 @@ def verify_token(token: str):
     except:
         return None
 
-def get_current_user(request):
-    from fastapi import Request
+def get_current_user(request: Request):
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
