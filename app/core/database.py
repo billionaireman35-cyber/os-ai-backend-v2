@@ -39,7 +39,11 @@ def init_db():
             with conn.cursor() as c:
                 # Enable pgvector extension
                 c.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                
+               # Ensure all columns exist (safe to run repeatedly)
+c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
+c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
+c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
                 # ========== USERS & AUTH ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -327,4 +331,8 @@ def init_db():
         logger.info("✅ Database initialized successfully")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
-        raise
+        raise                # Ensure all columns exist (safe to run repeatedly)
+                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
+                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
