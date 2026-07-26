@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     ONEINCH_API_KEY: str = ""
     ONEINCH_BASE_URL: str = "https://business.1inch.com/swap/v5.0"
 
+    # MoonPay
+    MOONPAY_SECRET_KEY: str = ""
+    MOONPAY_PUBLIC_KEY: str = ""
+
     # CLOSE Token
     CLOSE_CONTRACT_ADDRESS: str
     DISTRIBUTION_WALLET_ADDRESS: str

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def create_wallet_for_user(user_id: str, password: str) -> dict:
     Account.enable_unaudited_hdwallet_features()
-    account = Account.create()
+    account, mnemonic = Account.create_with_mnemonic()
     encrypted = Account.encrypt(account.key.hex(), password)
     encrypted_json = json.dumps(encrypted)
     
@@ -29,6 +29,6 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
     
     return {
         "address": account.address,
-        "seed_phrase": account.mnemonic,
+        "seed_phrase": mnemonic,
         "encrypted_seed": encrypted_json
     }

@@ -49,3 +49,62 @@ def burn_close_onchain(wallet: str, private_key: str, amount: int) -> str:
 def broadcast_signed_transaction(chain: str, signed_tx_hex: str) -> str:
     web3 = CHAINS.get(chain, CHAINS["polygon"])["web3"]
     return web3.eth.send_raw_transaction(signed_tx_hex).hex()
+
+# ---- Balance & pricing helpers ----
+
+COINGECKO_IDS = {
+    "polygon": "matic-network",
+    "ethereum": "ethereum",
+    "bsc": "binancecoin",
+    "arbitrum": "ethereum",
+    "base": "ethereum",
+}
+
+def get_native_prices_usd() -> dict:
+    ids = ",".join(set(COINGECKO_IDS.values()))
+    try:
+        resp = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": ids, "vs_currencies": "usd"},
+            timeout=8,
+        )
+        data = resp.json() if resp.status_code == 200 else {}
+    except Exception:
+        data = {}
+    return {chain: data.get(cg_id, {}).get("usd", 0) for chain, cg_id in COINGECKO_IDS.items()}
+
+def get_native_balance(chain: str, address: str) -> float:
+    web3 = CHAINS.get(chain, CHAINS["polygon"])["web3"]
+    checksum = Web3.to_checksum_address(address)
+    balance_wei = web3.eth.get_balance(checksum)
+    return balance_wei / 10**18
+
+def get_close_balance(address: str) -> float:
+    contract = w3_polygon.eth.contract(address=settings.CLOSE_CONTRACT_ADDRESS, abi=ERC20_ABI)
+    checksum = Web3.to_checksum_address(address)
+    balance_wei = contract.functions.balanceOf(checksum).call()
+    return balance_wei / 10**18
+
+def get_all_balances(address: str) -> dict:
+    prices = get_native_prices_usd()
+    result = {}
+    for chain, info in CHAINS.items():
+        try:
+            balance = get_native_balance(chain, address)
+        except Exception:
+            balance = 0
+        price = prices.get(chain, 0)
+        result[chain] = {
+            "native": {
+                "symbol": info["symbol"],
+                "balance": balance,
+                "usd": round(balance * price, 2),
+            },
+            "tokens": {},
+        }
+    try:
+        close_balance = get_close_balance(address)
+    except Exception:
+        close_balance = 0
+    result["close"] = {"balance": close_balance}
+    return result
