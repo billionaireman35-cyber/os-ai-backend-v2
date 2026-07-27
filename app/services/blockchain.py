@@ -79,3 +79,20 @@ def get_all_balances(address: str) -> dict:
                     "usd": 0.0
                 }
     return result
+
+def send_close_from_distribution(to_address: str, amount: int) -> str:
+    """
+    Send CLOSE tokens from the distribution wallet to the given address.
+    Returns the transaction hash.
+    """
+    web3 = w3_polygon
+    contract = web3.eth.contract(address=settings.CLOSE_CONTRACT_ADDRESS, abi=ERC20_ABI)
+    amount_wei = int(amount * 10**18)
+    nonce = web3.eth.get_transaction_count(settings.DISTRIBUTION_WALLET_ADDRESS, 'pending')
+    tx = contract.functions.transfer(to_address, amount_wei).build_transaction({
+        'from': settings.DISTRIBUTION_WALLET_ADDRESS,
+        'nonce': nonce,
+        'gas': 100000,
+        'gasPrice': web3.eth.gas_price
+    })
+    return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)

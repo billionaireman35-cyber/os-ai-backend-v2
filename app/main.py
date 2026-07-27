@@ -39,3 +39,10 @@ async def health():
 from app.api.v1.websocket import token_feed_ws
 
 app.add_websocket_route("/ws/token-feed", token_feed_ws)
+@app.on_event("startup")
+async def dump_routes():
+    import logging
+    logger = logging.getLogger("uvicorn")
+    for route in app.routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            logger.info(f"Route: {route.path} -> {route.methods}")

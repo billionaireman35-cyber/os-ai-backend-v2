@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin
 from app.api.v1 import developer
 from app.api.v1 import wc
+from app.api.v1 import founder
 from app.api.v1 import tokens
 # from app.services import safe
 
@@ -19,3 +20,4 @@ router.include_router(developer.router)
 router.include_router(wc.router)
 
 api_router = router
+router.include_router(founder.router, prefix="/founder", tags=["Founder"])

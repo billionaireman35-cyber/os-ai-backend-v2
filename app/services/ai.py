@@ -353,3 +353,117 @@ def build_system_prompt(user_query: str, user: dict, memory_context: str = "", w
         user_query=user_query
     )
     return prompt
+# ------------------------------------------------------------------------------
+# STREAMING AI CALL
+# ------------------------------------------------------------------------------
+import httpx
+import json
+
+async def call_ai_model_stream(messages: list, user_id: str = None, model: str = None, tier: str = "guest"):
+    """
+    Stream AI responses from OpenRouter (or fallback) as tokens arrive.
+    Yields text chunks, and after completion stores the full response in memory.
+    """
+    # Determine model access based on tier
+    allowed_models = TIER_MODEL_ACCESS.get(tier, TIER_MODEL_ACCESS["guest"])
+    default_model = DEFAULT_MODELS.get(tier, DEFAULT_MODELS["guest"])
+    if not model or model not in allowed_models:
+        model = default_model
+        logger.info(f"Tier '{tier}' using default model for streaming: {model}")
+
+    openrouter_model = MODEL_MAP.get(model, MODEL_MAP[default_model])
+    full_content = []
+
+    # 1. Try OpenRouter streaming
+    if settings.OPENROUTER_API_KEY:
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    OPENROUTER_URL,
+                    headers={
+                        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": settings.FRONTEND_URL or "https://osai.io",
+                        "X-Title": "OS AI"
+                    },
+                    json={
+                        "model": openrouter_model,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 4096,
+                        "stream": True,
+                    }
+                ) as response:
+                    if response.status_code != 200:
+                        logger.error(f"OpenRouter stream error {response.status_code}: {await response.aread()}")
+                        raise Exception("OpenRouter stream failed")
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                if content:
+                                    full_content.append(content)
+                                    yield content
+                            except json.JSONDecodeError:
+                                pass
+                if full_content:
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    return
+            except Exception as e:
+                logger.error(f"OpenRouter streaming error: {e}")
+
+    # 2. Fallback to Groq streaming
+    if settings.GROQ_API_KEY:
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    GROQ_URL,
+                    headers={
+                        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": GROQ_MODEL,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 2500,
+                        "stream": True,
+                    }
+                ) as response:
+                    if response.status_code != 200:
+                        logger.error(f"Groq stream error {response.status_code}: {await response.aread()}")
+                        raise Exception("Groq stream failed")
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                if content:
+                                    full_content.append(content)
+                                    yield content
+                            except json.JSONDecodeError:
+                                pass
+                if full_content:
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    return
+            except Exception as e:
+                logger.error(f"Groq streaming error: {e}")
+
+    # 3. Ultimate fallback
+    error_msg = "I'm having trouble connecting to AI services. Please try again later."
+    yield error_msg
+    if user_id:
+        store_memory(user_id, error_msg, messages[-1]["content"])

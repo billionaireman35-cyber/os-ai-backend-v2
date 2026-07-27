@@ -3,7 +3,7 @@ import hmac
 import json
 import logging
 import uuid
-from urllib.parse import urlencode, urlparse, parse_qsl
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -11,58 +11,15 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.services.blockchain import broadcast_signed_transaction, get_all_balances
-from app.services.safe import create_safe, list_safes_for_user
 from app.services.wallet_service import create_wallet_for_user
+from app.api.v1.market import get_prices
 
 router = APIRouter(prefix="/safe", tags=["Safe"])
 wallet_router = APIRouter(tags=["Wallet"])
 logger = logging.getLogger(__name__)
 
-
-# ---------------- Gnosis Safe (multisig) ----------------
-
-@router.post("/create")
-async def deploy_safe(req: dict, user=Depends(get_current_user)):
-    if not user:
-        raise HTTPException(401, "Authentication required")
-    owners = req.get("owners", [])
-    threshold = req.get("threshold", 1)
-    chain = req.get("chain", "polygon")
-    if not owners or threshold < 1 or threshold > len(owners):
-        raise HTTPException(400, "Invalid owners or threshold")
-    try:
-        safe_address = create_safe(owners, threshold, chain)
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("""
-                    INSERT INTO user_safes (id, user_id, safe_address, chain, owners, threshold)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (str(uuid.uuid4()), user["id"], safe_address, chain, json.dumps(owners), threshold))
-                conn.commit()
-        return {"safe_address": safe_address, "chain": chain}
-    except Exception as e:
-        logger.error(f"Safe creation failed: {e}")
-        raise HTTPException(500, "Safe creation failed")
-
-
-@router.get("/list")
-async def list_safes(user=Depends(get_current_user)):
-    if not user:
-        raise HTTPException(401, "Authentication required")
-    safes = list_safes_for_user(user["id"])
-    return {"safes": safes}
-
-
-# ---------------- Standard (EOA) wallet ----------------
-
 @wallet_router.post("/create")
 async def create_wallet(req: dict, user=Depends(get_current_user)):
-    """
-    Create a standard (non-Safe) wallet for the current user, encrypted with a
-    wallet-specific password chosen by the user. Returns the address and the
-    one-time seed phrase for backup — this is the only time the seed phrase
-    is ever shown in plaintext.
-    """
     if not user:
         raise HTTPException(401, "Authentication required")
     password = req.get("password")
@@ -74,7 +31,7 @@ async def create_wallet(req: dict, user=Depends(get_current_user)):
             c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
             row = c.fetchone()
             if row and row[0]:
-                raise HTTPException(400, "Wallet already exists for this account")
+                raise HTTPException(400, "Wallet already exists")
 
     try:
         result = create_wallet_for_user(user["id"], password)
@@ -87,10 +44,8 @@ async def create_wallet(req: dict, user=Depends(get_current_user)):
         logger.error(f"Wallet creation failed: {e}")
         raise HTTPException(500, "Wallet creation failed")
 
-
 @wallet_router.get("/seed")
 async def get_seed(user=Depends(get_current_user)):
-    """Return the encrypted seed so the frontend can decrypt it locally with the wallet password."""
     if not user:
         raise HTTPException(401, "Authentication required")
     with get_db() as conn:
@@ -98,9 +53,8 @@ async def get_seed(user=Depends(get_current_user)):
             c.execute("SELECT wallet_encrypted_seed FROM users WHERE id = %s", (user["id"],))
             row = c.fetchone()
             if not row or not row[0]:
-                raise HTTPException(404, "No wallet found for this account")
+                raise HTTPException(404, "No wallet found")
     return {"encrypted_seed": row[0]}
-
 
 @wallet_router.get("/balance")
 async def get_balance(user=Depends(get_current_user)):
@@ -108,21 +62,39 @@ async def get_balance(user=Depends(get_current_user)):
         raise HTTPException(401, "Authentication required")
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
+            c.execute("SELECT wallet_address, close_balance, close_staked FROM users WHERE id = %s", (user["id"],))
             row = c.fetchone()
     if not row or not row[0]:
-        raise HTTPException(404, "No wallet found for this account")
+        raise HTTPException(404, "No wallet found")
 
     try:
-        return get_all_balances(row[0])
+        # Get balances (without USD)
+        balances = get_all_balances(row[0])
+        # Get prices
+        prices = get_prices()
+        # Add USD values
+        for chain in balances:
+            if chain == "close":
+                continue
+            native = balances[chain]["native"]
+            symbol = native["symbol"]
+            native["usd"] = prices.get(symbol, 0.0) * float(native["balance"])
+            # Also price tokens if we have any
+            for token_symbol, token_data in balances[chain]["tokens"].items():
+                token_data["usd"] = prices.get(token_symbol, 0.0) * float(token_data["balance"])
+        # Add CLOSE
+        balances["close"] = {
+            "balance": row[1] or 0,
+            "staked": row[2] or 0,
+            "usd": prices.get("CLOSE", 0.0) * (row[1] or 0)
+        }
+        return balances
     except Exception as e:
         logger.error(f"Balance fetch failed: {e}")
         raise HTTPException(500, "Failed to fetch balances")
 
-
 @wallet_router.post("/broadcast")
 async def broadcast(req: dict, user=Depends(get_current_user)):
-    """Relay a client-signed transaction to the chain. The private key never touches the backend."""
     if not user:
         raise HTTPException(401, "Authentication required")
     signed_tx = req.get("signed_tx")
@@ -136,15 +108,8 @@ async def broadcast(req: dict, user=Depends(get_current_user)):
         logger.error(f"Broadcast failed: {e}")
         raise HTTPException(400, f"Broadcast failed: {e}")
 
-
-# ---------------- MoonPay widget URL signing ----------------
-
 @wallet_router.post("/moonpay-sign")
 async def moonpay_sign(req: dict, user=Depends(get_current_user)):
-    """
-    Sign a MoonPay widget URL's query string with HMAC-SHA256 using the
-    secret key. The secret key never leaves the backend.
-    """
     if not user:
         raise HTTPException(401, "Authentication required")
     widget_url = req.get("url")
@@ -162,5 +127,4 @@ async def moonpay_sign(req: dict, user=Depends(get_current_user)):
     ).digest()
     import base64
     signature_b64 = base64.b64encode(signature).decode("utf-8")
-
     return {"signature": signature_b64}

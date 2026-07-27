@@ -1,10 +1,12 @@
 import os
 from typing import List
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
 
     # Database
     DATABASE_URL: str
