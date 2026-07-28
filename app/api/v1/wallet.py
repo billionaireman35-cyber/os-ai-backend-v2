@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 @wallet_router.post("/create")
 async def create_wallet(req: dict, user=Depends(get_current_user)):
+    print("Create wallet called, user:", user)
     if not user:
         raise HTTPException(401, "Authentication required")
     password = req.get("password")
@@ -91,7 +92,7 @@ async def get_balance(user=Depends(get_current_user)):
         return balances
     except Exception as e:
         logger.error(f"Balance fetch failed: {e}")
-        raise HTTPException(500, "Failed to fetch balances")
+        raise HTTPException(500, f"Failed to fetch balances: {str(e)}")
 
 @wallet_router.post("/broadcast")
 async def broadcast(req: dict, user=Depends(get_current_user)):
@@ -128,3 +129,9 @@ async def moonpay_sign(req: dict, user=Depends(get_current_user)):
     import base64
     signature_b64 = base64.b64encode(signature).decode("utf-8")
     return {"signature": signature_b64}
+
+@wallet_router.get("/test-auth")
+async def test_auth(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    return {"authenticated": True, "user_id": user["id"]}

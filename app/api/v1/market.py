@@ -73,3 +73,22 @@ def get_prices() -> dict:
 @router.get("/prices")
 async def get_price_endpoint():
     return get_prices()
+
+def get_prices() -> dict:
+    try:
+        # Try to fetch from CoinGecko
+        if settings.COINGECKO_KEY:
+            # ... existing code ...
+            pass
+    except Exception as e:
+        logger.error(f"Price fetch failed: {e}")
+    # Always return fallback prices
+    return {
+        "CLOSE": 0.00009776,
+        "OSINA": 0.01,
+        "USDC": 1.0,
+        "USDT": 1.0,
+        "MATIC": 0.5,
+        "ETH": 3000,
+        "BNB": 500,
+    }

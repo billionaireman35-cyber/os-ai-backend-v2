@@ -1,6 +1,6 @@
 import os
 from typing import List
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
 
     # Blockchain
-    POLYGON_RPC_URL: str = "https://polygon-rpc.com"
+    POLYGON_RPC_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/demo"
     ETHEREUM_RPC_URL: str = "https://eth.llamarpc.com"
     BSC_RPC_URL: str = "https://bsc-dataseed.binance.org"
     ARBITRUM_RPC_URL: str = "https://arb1.arbitrum.io/rpc"
@@ -106,3 +106,5 @@ def get_safe_singleton(chain: str) -> str:
 
 def get_safe_proxy_factory(chain: str) -> str:
     return SAFE_PROXY_FACTORY_ADDRESSES.get(chain)
+    # Fallback RPCs (if primary fails)
+    POLYGON_RPC_FALLBACK_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/demo"

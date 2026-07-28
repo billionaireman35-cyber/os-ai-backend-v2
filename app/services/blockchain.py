@@ -96,3 +96,45 @@ def send_close_from_distribution(to_address: str, amount: int) -> str:
         'gasPrice': web3.eth.gas_price
     })
     return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)
+
+def get_all_balances(address: str) -> dict:
+    result = {}
+    for chain_name, chain_data in CHAINS.items():
+        try:
+            web3 = chain_data["web3"]
+            native_balance = web3.eth.get_balance(address)
+            native_symbol = chain_data["symbol"]
+            result[chain_name] = {
+                "native": {
+                    "symbol": native_symbol,
+                    "balance": web3.from_wei(native_balance, "ether"),
+                    "usd": 0.0
+                },
+                "tokens": {}
+            }
+            # Fetch token balances for known tokens
+            token_list = []
+            if chain_name == "polygon":
+                token_list = [
+                    {"address": "0x3c6833cFDdED80fE76474a3Cb2Cc050Daec91fe8", "symbol": "CLOSE", "decimals": 18},
+                    {"address": "0xbaf280b74c264a911b41341a26508eac9e74fd4f", "symbol": "OSINA", "decimals": 18},
+                    {"address": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "symbol": "USDC", "decimals": 6},
+                ]
+            for token in token_list:
+                try:
+                    balance = get_token_balance(chain_name, address, token["address"], token["decimals"])
+                    if balance > 0:
+                        result[chain_name]["tokens"][token["symbol"]] = {
+                            "address": token["address"],
+                            "balance": balance,
+                            "usd": 0.0
+                        }
+                except Exception as e:
+                    logger.error(f"Failed to fetch token {token['symbol']} balance: {e}")
+        except Exception as e:
+            logger.error(f"Failed to fetch balance for chain {chain_name}: {e}")
+            result[chain_name] = {
+                "native": {"symbol": "ERROR", "balance": 0, "usd": 0.0},
+                "tokens": {}
+            }
+    return result

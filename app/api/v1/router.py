@@ -9,7 +9,6 @@ from app.api.v1 import tokens
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(chat.router, prefix="/chat", tags=["Chat"])
-router.include_router(wallet.router, prefix="/wallet", tags=["Wallet"])
 router.include_router(wallet.wallet_router, prefix="/wallet", tags=["Wallet"])
 router.include_router(swap.router, prefix="/swap", tags=["Swap"])
 router.include_router(bridge.router, prefix="/bridge", tags=["Bridge"])
