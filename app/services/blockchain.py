@@ -49,57 +49,6 @@ def get_token_balance(chain: str, wallet_address: str, token_address: str, decim
 def get_all_balances(address: str) -> dict:
     result = {}
     for chain_name, chain_data in CHAINS.items():
-        web3 = chain_data["web3"]
-        native_balance = web3.eth.get_balance(address)
-        native_symbol = chain_data["symbol"]
-        result[chain_name] = {
-            "native": {
-                "symbol": native_symbol,
-                "balance": web3.from_wei(native_balance, "ether"),
-                "usd": 0.0
-            },
-            "tokens": {}
-        }
-        # Fetch token balances for known tokens (we'll use a hardcoded list for now)
-        # We'll define tokens per chain
-        token_list = []
-        if chain_name == "polygon":
-            token_list = [
-                {"address": "0x3c6833cFDdED80fE76474a3Cb2Cc050Daec91fe8", "symbol": "CLOSE", "decimals": 18},
-                {"address": "0xbaf280b74c264a911b41341a26508eac9e74fd4f", "symbol": "OSINA", "decimals": 18},
-                {"address": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "symbol": "USDC", "decimals": 6},
-            ]
-        # Add more chains later
-        for token in token_list:
-            balance = get_token_balance(chain_name, address, token["address"], token["decimals"])
-            if balance > 0:
-                result[chain_name]["tokens"][token["symbol"]] = {
-                    "address": token["address"],
-                    "balance": balance,
-                    "usd": 0.0
-                }
-    return result
-
-def send_close_from_distribution(to_address: str, amount: int) -> str:
-    """
-    Send CLOSE tokens from the distribution wallet to the given address.
-    Returns the transaction hash.
-    """
-    web3 = w3_polygon
-    contract = web3.eth.contract(address=settings.CLOSE_CONTRACT_ADDRESS, abi=ERC20_ABI)
-    amount_wei = int(amount * 10**18)
-    nonce = web3.eth.get_transaction_count(settings.DISTRIBUTION_WALLET_ADDRESS, 'pending')
-    tx = contract.functions.transfer(to_address, amount_wei).build_transaction({
-        'from': settings.DISTRIBUTION_WALLET_ADDRESS,
-        'nonce': nonce,
-        'gas': 100000,
-        'gasPrice': web3.eth.gas_price
-    })
-    return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)
-
-def get_all_balances(address: str) -> dict:
-    result = {}
-    for chain_name, chain_data in CHAINS.items():
         try:
             web3 = chain_data["web3"]
             native_balance = web3.eth.get_balance(address)
