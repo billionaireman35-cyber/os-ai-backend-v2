@@ -1,44 +1,47 @@
 import logging
+import ssl
 from contextlib import contextmanager
-import psycopg2
-from psycopg2 import pool
+import pg8000
+from urllib.parse import urlparse
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-db_pool = None
-
-def get_db_pool():
-    global db_pool
-    if db_pool is None:
-        db_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            dsn=settings.DATABASE_URL,
-            connect_timeout=10
-        )
-    return db_pool
-
 @contextmanager
 def get_db():
-    pool = get_db_pool()
-    conn = pool.getconn()
+    """Return a PostgreSQL connection using pg8000 with SSL."""
+    url = urlparse(settings.DATABASE_URL)
+    dbname = url.path[1:]
+    user = url.username
+    password = url.password
+    host = url.hostname
+    port = url.port or 5432
+
+    ssl_context = ssl.create_default_context()
+
+    conn = pg8000.connect(
+        user=user,
+        password=password,
+        host=host,
+        port=port,
+        database=dbname,
+        ssl_context=ssl_context,
+    )
     try:
         yield conn
     except Exception:
         conn.rollback()
         raise
     finally:
-        pool.putconn(conn)
+        conn.close()
 
 def init_db():
-    """Initialize database tables and apply schema updates."""
+    """Initialize database tables."""
     try:
         with get_db() as conn:
             with conn.cursor() as c:
                 c.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-                # ========== USERS & AUTH ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id UUID PRIMARY KEY,
@@ -57,7 +60,6 @@ def init_db():
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,7 +69,6 @@ def init_db():
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS verification_codes (
                         email TEXT NOT NULL,
@@ -80,7 +81,6 @@ def init_db():
                 """)
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_email_purpose ON verification_codes (email, purpose)")
 
-                # ========== CHAT & AI MEMORY ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS chats (
                         id TEXT PRIMARY KEY,
@@ -92,7 +92,6 @@ def init_db():
                         updated TIMESTAMP DEFAULT NOW()
                     )
                 """)
-
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS chat_messages (
                         id TEXT PRIMARY KEY,
@@ -106,7 +105,6 @@ def init_db():
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
-
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS memories (
                         id TEXT PRIMARY KEY,
@@ -121,7 +119,6 @@ def init_db():
                 """)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_memories_user_embedding ON memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);")
 
-                # ========== TOKEN & FINANCE ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS close_transactions (
                         id UUID PRIMARY KEY,
@@ -135,8 +132,20 @@ def init_db():
                         created TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
                 c.execute("CREATE INDEX IF NOT EXISTS idx_close_transactions_reference ON close_transactions (reference_id)")
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS os_wallets (
+                        id UUID PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        chain TEXT DEFAULT 'polygon',
+                        address TEXT NOT NULL,
+                        encrypted_key TEXT NOT NULL,
+                        label TEXT DEFAULT 'Primary',
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS revenue_logs (
@@ -159,19 +168,46 @@ def init_db():
                     )
                 """)
 
-                # ========== GNOSIS SAFE ==========
                 c.execute("""
-                    CREATE TABLE IF NOT EXISTS user_safes (
+                    CREATE TABLE IF NOT EXISTS workspaces (
                         id UUID PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        room_code TEXT UNIQUE NOT NULL,
+                        password_hash TEXT,
+                        owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        is_public BOOLEAN DEFAULT TRUE,
+                        status TEXT DEFAULT 'pending',
+                        fee_paid BOOLEAN DEFAULT FALSE,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_room_code ON workspaces (room_code)")
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS workspace_members (
+                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
                         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        safe_address TEXT NOT NULL,
-                        chain TEXT DEFAULT 'polygon',
-                        owners JSONB NOT NULL,
-                        threshold INTEGER NOT NULL,
+                        role TEXT DEFAULT 'member',
+                        status TEXT DEFAULT 'pending',
+                        joined_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (workspace_id, user_id)
+                    )
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS workspace_messages (
+                        id UUID PRIMARY KEY,
+                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        content TEXT NOT NULL,
+                        is_ai BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                c.execute("CREATE INDEX IF NOT EXISTS idx_user_safes_user_id ON user_safes (user_id);")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_workspace_messages_workspace ON workspace_messages (workspace_id, created_at)")
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS safe_transactions (
@@ -193,91 +229,6 @@ def init_db():
                 """)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_safe_transactions_safe_address ON safe_transactions (safe_address)")
 
-                # ========== HUSTLE HUBS (WORKSPACES) ==========
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS workspaces (
-                        id UUID PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        description TEXT,
-                        room_code TEXT UNIQUE NOT NULL,
-                        password_hash TEXT,
-                        owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        is_public BOOLEAN DEFAULT TRUE,
-                        status TEXT DEFAULT 'pending',
-                        fee_paid BOOLEAN DEFAULT FALSE,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
-                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_room_code ON workspaces (room_code)")
-
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS workspace_members (
-                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        role TEXT DEFAULT 'member',
-                        status TEXT DEFAULT 'pending',
-                        joined_at TIMESTAMP DEFAULT NOW(),
-                        PRIMARY KEY (workspace_id, user_id)
-                    )
-                """)
-                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
-
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS workspace_messages (
-                        id UUID PRIMARY KEY,
-                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        content TEXT NOT NULL,
-                        is_ai BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
-                c.execute("CREATE INDEX IF NOT EXISTS idx_workspace_messages_workspace ON workspace_messages (workspace_id, created_at)")
-
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS workspace_memories (
-                        id UUID PRIMARY KEY,
-                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-                        content TEXT,
-                        query TEXT,
-                        embedding vector(1536),
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
-
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS workspace_invites (
-                        id UUID PRIMARY KEY,
-                        workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-                        email TEXT,
-                        invite_code TEXT UNIQUE NOT NULL,
-                        expires_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
-
-                # ========== WALLETCONNECT SESSIONS ==========
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS walletconnect_sessions (
-                        id UUID PRIMARY KEY,
-                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        topic TEXT NOT NULL,
-                        dapp_name TEXT,
-                        dapp_url TEXT,
-                        chain_id INTEGER,
-                        accounts JSONB,
-                        expires_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
-                c.execute("CREATE INDEX IF NOT EXISTS idx_walletconnect_sessions_user ON walletconnect_sessions (user_id)")
-
-                # ========== DEVELOPER TOOLS ==========
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS api_keys (
                         id UUID PRIMARY KEY,
@@ -304,23 +255,15 @@ def init_db():
                     )
                 """)
 
-                # ========== MULTI-CHAIN WALLETS ==========
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS os_wallets (
-                        id UUID PRIMARY KEY,
-                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        chain TEXT DEFAULT 'polygon',
-                        address TEXT NOT NULL,
-                        encrypted_key TEXT NOT NULL,
-                        label TEXT DEFAULT 'Primary',
-                        is_active BOOLEAN DEFAULT TRUE,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                """)
+                # Additional columns for existing tables (safe to run)
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+                c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
+                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
+                c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
 
                 conn.commit()
-
-        logger.info("Database initialized successfully")
+        logger.info("✅ Database initialized successfully")
     except Exception as e:
-        logger.error(f"Database init error: {e}")
+        logger.error(f"❌ Database init error: {e}")
         raise

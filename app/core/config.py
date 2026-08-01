@@ -1,72 +1,56 @@
 import os
 from typing import List
-from pydantic import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Database
     DATABASE_URL: str
-
-    # Security
     JWT_SECRET: str
     FOUNDER_KEY: str
     ALLOWED_ORIGINS: List[str] = ["*"]
 
-    # Email
     RESEND_API_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
 
-    # Blockchain
-    POLYGON_RPC_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/demo"
+    POLYGON_RPC_URL: str = "https://polygon-rpc.com"
     ETHEREUM_RPC_URL: str = "https://eth.llamarpc.com"
     BSC_RPC_URL: str = "https://bsc-dataseed.binance.org"
     ARBITRUM_RPC_URL: str = "https://arb1.arbitrum.io/rpc"
     BASE_RPC_URL: str = "https://mainnet.base.org"
     ALCHEMY_API_KEY: str = ""
 
-    # AI & Embeddings
     OPENROUTER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     EMBEDDING_MODEL: str = "text-embedding-ada-002"
     MEMORY_RETRIEVAL_LIMIT: int = 5
 
-    # APIs
     COINGECKO_KEY: str = ""
     NEWS_API_KEY: str = ""
     SERPAPI_KEY: str = ""
     ONEINCH_API_KEY: str = ""
     ONEINCH_BASE_URL: str = "https://business.1inch.com/swap/v5.0"
 
-    # MoonPay
     MOONPAY_SECRET_KEY: str = ""
     MOONPAY_PUBLIC_KEY: str = ""
 
-    # CLOSE Token
     CLOSE_CONTRACT_ADDRESS: str
     DISTRIBUTION_WALLET_ADDRESS: str
     DISTRIBUTION_WALLET_PRIVATE_KEY: str
 
-    # Economics
     BURN_PER_MESSAGE: int = 25
     FREE_CLOSE_AMOUNT: int = 500
     SWAP_FEE_PERCENT: float = 0.75
     BRIDGE_FEE_PERCENT: float = 0.3
     YIELD_FEE_PERCENT: float = 10.0
 
-    # Gnosis Safe
     SAFE_TRANSACTION_SERVICE_URL: str = "https://safe-transaction-polygon.safe.global"
 
-    # Environment
     ENVIRONMENT: str = "development"
     SUPPORTED_CHAINS: List[str] = ["polygon", "ethereum", "bsc", "arbitrum", "base", "bitcoin"]
 
     def get_rpc_url(self, chain: str) -> str:
-        """Return Alchemy RPC URL for the given chain, falling back to public RPCs."""
         if chain == "bsc":
             return self.BSC_RPC_URL
         if not self.ALCHEMY_API_KEY:
@@ -79,10 +63,9 @@ class Settings(BaseSettings):
         }
         return f"https://{alchemy_chain_map.get(chain, 'eth-mainnet')}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}"
 
-
 settings = Settings()
 
-# Gnosis Safe deployments (official)
+# Gnosis Safe addresses (kept for later)
 SAFE_SINGLETON_ADDRESSES = {
     "polygon": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
     "ethereum": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
@@ -99,12 +82,8 @@ SAFE_PROXY_FACTORY_ADDRESSES = {
     "base": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
 }
 
-
 def get_safe_singleton(chain: str) -> str:
     return SAFE_SINGLETON_ADDRESSES.get(chain)
 
-
 def get_safe_proxy_factory(chain: str) -> str:
     return SAFE_PROXY_FACTORY_ADDRESSES.get(chain)
-    # Fallback RPCs (if primary fails)
-    POLYGON_RPC_FALLBACK_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/demo"

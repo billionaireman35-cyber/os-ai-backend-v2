@@ -1,9 +1,9 @@
+import app.patch  # Apply ForwardRef patch before any other imports
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.database import init_db
-from dotenv import load_dotenv
-load_dotenv()
 from app.core.config import settings
 
 app = FastAPI(
@@ -36,13 +36,3 @@ async def health():
         "environment": settings.ENVIRONMENT,
         "chains": settings.SUPPORTED_CHAINS,
     }
-from app.api.v1.websocket import token_feed_ws
-
-app.add_websocket_route("/ws/token-feed", token_feed_ws)
-@app.on_event("startup")
-async def dump_routes():
-    import logging
-    logger = logging.getLogger("uvicorn")
-    for route in app.routes:
-        if hasattr(route, "path") and hasattr(route, "methods"):
-            logger.info(f"Route: {route.path} -> {route.methods}")
