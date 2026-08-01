@@ -92,16 +92,11 @@ def send_close_from_distribution(to_address: str, amount: int) -> str:
     web3 = get_web3("polygon")
     contract = web3.eth.contract(address=settings.CLOSE_CONTRACT_ADDRESS, abi=ERC20_ABI)
     amount_wei = int(amount * 10**18)
-    nonce = web3.eth.get_transaction_count(settings.DISTRIBUTION_WALLET_ADDRESS, 'latest')
-    # Estimate gas dynamically
-    estimated_gas = contract.functions.transfer(to_address, amount_wei).estimate_gas({
-        'from': settings.DISTRIBUTION_WALLET_ADDRESS
-    })
-    gas_limit = int(estimated_gas * 1.2)  # add 20% buffer
+    nonce = web3.eth.get_transaction_count(settings.DISTRIBUTION_WALLET_ADDRESS, 'pending')
     tx = contract.functions.transfer(to_address, amount_wei).build_transaction({
         'from': settings.DISTRIBUTION_WALLET_ADDRESS,
         'nonce': nonce,
-        'gas': gas_limit,
+        'gas': 100000,
         'gasPrice': web3.eth.gas_price
     })
     return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)

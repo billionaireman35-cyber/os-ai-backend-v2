@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET: str
     FOUNDER_KEY: str
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "https://yourdomain.com"]  # ← CHANGE THIS
+    ALLOWED_ORIGINS: List[str] = ["*"]
 
     RESEND_API_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
@@ -65,6 +65,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Gnosis Safe addresses (kept for later)
 SAFE_SINGLETON_ADDRESSES = {
     "polygon": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
     "ethereum": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
