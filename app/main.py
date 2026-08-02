@@ -1,3 +1,4 @@
+from __future__ import annotations
 import app.patch  # Apply ForwardRef patch before any other imports
 
 from fastapi import FastAPI
