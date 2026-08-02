@@ -1,8 +1,8 @@
-fastapi==0.115.0
+fastapi==0.115.11
 uvicorn==0.30.0
 pg8000==1.30.5
-pydantic==2.10.0
-pydantic-settings==2.5.0
+pydantic==2.10.4
+pydantic-settings==2.6.0
 python-dotenv==1.0.0
 web3==6.11.3
 eth-account==0.10.0
