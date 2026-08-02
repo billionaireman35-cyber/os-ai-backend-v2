@@ -16,7 +16,9 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode()) if hashed else False
 
-def create_token(user_id: str) -> str:
+def create_token(user_id) -> str:
+    # Ensure user_id is a string (in case it's a UUID object)
+    user_id = str(user_id)
     header = base64.urlsafe_b64encode(
         json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
     ).decode().rstrip("=")
