@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 async def send_verification_code(req: SendCodeRequest, background_tasks: BackgroundTasks):
     email = req.email.strip()
     if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
-logger.info(f"📧 Verification code for {email}: {code}")
         raise HTTPException(400, "Valid email required")
     alphabet = string.ascii_uppercase + string.digits
     code = ''.join(secrets.choice(alphabet) for _ in range(6))
