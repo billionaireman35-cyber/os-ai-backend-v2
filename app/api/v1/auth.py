@@ -93,7 +93,7 @@ async def register(req: RegisterRequest):
                 INSERT INTO users (id, email, password_hash, name, device_fingerprint)
                 VALUES (%s, %s, %s, %s, %s)
             """, (user_id, req.email, hash_password(req.password), name, req.fingerprint))
-            token = create_token(user_id)
+            token = create_token(str(user_id))
             c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
                       (user_id, token, now_utc() + timedelta(days=30)))
             conn.commit()
@@ -123,7 +123,7 @@ async def login(req: LoginRequest):
                 raise HTTPException(403, "Founder account must use the founder login portal")
             if req.fingerprint:
                 c.execute("UPDATE users SET device_fingerprint = %s, fingerprint_verified = TRUE WHERE id = %s", (req.fingerprint, user_id))
-            token = create_token(user_id)
+            token = create_token(str(user_id))
             c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
                       (user_id, token, now_utc() + timedelta(days=30)))
             conn.commit()
