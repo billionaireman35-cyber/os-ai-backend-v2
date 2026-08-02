@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET: str
     FOUNDER_KEY: str
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "https://yourdomain.com"]  # ← CHANGE THIS
+    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "https://os-ai-frontend-v2.pages.dev"]   # ← tighten for production
 
     RESEND_API_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
@@ -49,6 +49,10 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
     SUPPORTED_CHAINS: List[str] = ["polygon", "ethereum", "bsc", "arbitrum", "base", "bitcoin"]
+
+    # Cloudflare AI (optional)
+    CLOUDFLARE_ACCOUNT_ID: str = ""
+    CLOUDFLARE_API_KEY: str = ""
 
     def get_rpc_url(self, chain: str) -> str:
         if chain == "bsc":

@@ -4,10 +4,15 @@ from app.core.database import get_db
 from app.core.security import create_token, verify_password, hash_password, now_utc, get_current_user
 from app.services.email import send_verification_email
 import re, uuid, hmac, secrets, string, asyncio, logging
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+def ensure_aware(dt):
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 @router.post("/send-code")
 async def send_verification_code(req: SendCodeRequest, background_tasks: BackgroundTasks):
@@ -39,6 +44,7 @@ async def verify_code(req: VerifyCodeRequest):
             if not row:
                 raise HTTPException(400, "Invalid or expired code")
             stored_code, attempts, expires_at = row
+            expires_at = ensure_aware(expires_at)
             if expires_at < now_utc():
                 c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose = %s", (email, req.purpose))
                 conn.commit()
@@ -62,7 +68,6 @@ async def register(req: RegisterRequest):
         raise HTTPException(400, "Password must be at least 8 characters")
     with get_db() as conn:
         with conn.cursor() as c:
-            # Proper verification code validation
             c.execute(
                 "SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose = 'verification'",
                 (req.email,)
@@ -71,11 +76,11 @@ async def register(req: RegisterRequest):
             if not row:
                 raise HTTPException(400, "Invalid or expired verification code")
             stored_code, expires_at = row
+            expires_at = ensure_aware(expires_at)
             if expires_at < now_utc():
                 raise HTTPException(400, "Verification code expired. Request a new one.")
             if not hmac.compare_digest(stored_code, req.verification_code):
                 raise HTTPException(400, "Invalid verification code")
-            # Delete the code after successful use
             c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose = 'verification'", (req.email,))
             conn.commit()
 
@@ -183,8 +188,14 @@ async def reset_password(req: dict):
         with conn.cursor() as c:
             c.execute("SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose='password_reset' AND expires_at > NOW()", (email,))
             row = c.fetchone()
-            if not row or not hmac.compare_digest(row[0], code):
+            if not row:
                 raise HTTPException(400, "Invalid or expired reset code")
+            stored_code, expires_at = row
+            expires_at = ensure_aware(expires_at)
+            if expires_at < now_utc():
+                raise HTTPException(400, "Reset code expired. Request a new one.")
+            if not hmac.compare_digest(stored_code, code):
+                raise HTTPException(400, "Invalid reset code")
             c.execute("UPDATE users SET password_hash = %s WHERE email = %s", (hash_password(new_password), email))
             c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose='password_reset'", (email,))
             c.execute("DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE email = %s)", (email,))
