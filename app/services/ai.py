@@ -360,6 +360,14 @@ def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: 
 # ------------------------------------------------------------------------------
 # STREAMING AI CALL (with model capture)
 # ------------------------------------------------------------------------------
+# FIX: Previously, if a provider began streaming tokens to the client and then
+# failed mid-stream, the code fell through to try the next provider. Because
+# tokens had *already* been yielded to the client, the next provider's full
+# response (and, if everything ultimately failed, the generic fallback error
+# message) got appended after it — producing the duplicated/garbled output
+# seen in testing. The fix: track whether any content has been sent for this
+# turn. Once true, a mid-stream failure ends the generator cleanly instead of
+# trying another provider or appending the fallback error message.
 async def call_ai_model_stream(messages: list, user_id: str = None, model: str = None, tier: str = "guest", model_store: list = None):
     allowed_models = TIER_MODEL_ACCESS.get(tier, TIER_MODEL_ACCESS["guest"])
     default_model = DEFAULT_MODELS.get(tier, DEFAULT_MODELS["guest"])
@@ -369,7 +377,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
 
     openrouter_model = MODEL_MAP.get(model, MODEL_MAP[default_model])
     full_content = []
-    model_used = model
+    any_content_yielded = False  # NEW: guards against post-failure fallback duplication
 
     if settings.OPENROUTER_API_KEY:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -404,6 +412,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                                 content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                                 if content:
                                     full_content.append(content)
+                                    any_content_yielded = True
                                     yield content
                             except json.JSONDecodeError:
                                 pass
@@ -416,6 +425,17 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     return
             except Exception as e:
                 logger.error(f"OpenRouter streaming error: {e}")
+                if any_content_yielded:
+                    # Client already has partial output for this turn — stop
+                    # cleanly instead of layering another provider's response
+                    # (or the generic error message) on top of it.
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    if model_store is not None:
+                        model_store[0] = f"{model} (OpenRouter, partial)"
+                    return
+                # else: nothing sent yet — safe to fall through to the next provider
 
     if settings.GROQ_API_KEY:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -448,6 +468,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                                 content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                                 if content:
                                     full_content.append(content)
+                                    any_content_yielded = True
                                     yield content
                             except json.JSONDecodeError:
                                 pass
@@ -460,10 +481,18 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     return
             except Exception as e:
                 logger.error(f"Groq streaming error: {e}")
+                if any_content_yielded:
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    if model_store is not None:
+                        model_store[0] = "Llama 3.3 70B (Groq, partial)"
+                    return
 
-    error_msg = "I'm having trouble connecting to AI services. Please try again later."
-    yield error_msg
-    if user_id:
-        store_memory(user_id, error_msg, messages[-1]["content"])
-    if model_store is not None:
-        model_store[0] = "fallback"
+    if not any_content_yielded:
+        error_msg = "I'm having trouble connecting to AI services. Please try again later."
+        yield error_msg
+        if user_id:
+            store_memory(user_id, error_msg, messages[-1]["content"])
+        if model_store is not None:
+            model_store[0] = "fallback"
