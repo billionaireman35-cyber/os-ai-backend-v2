@@ -2,16 +2,14 @@ import pydantic
 import sys
 import typing
 
-# Only apply the ForwardRef patch if we're on pydantic 1.x
-# Pydantic 2.x handles ForwardRef correctly on Python 3.12+.
 if pydantic.VERSION.startswith("1."):
     _orig_evaluate = typing.ForwardRef._evaluate
 
-    def _new_evaluate(self, globalns, localns, recursive_guard=frozenset()):
-        # Python 3.12.0 ForwardRef._evaluate signature: 
-        # (self, globalns, localns, recursive_guard=frozenset())
-        # The original patch passed type_params which doesn't exist in 3.12.0.
-        # We drop it and forward correctly.
-        return _orig_evaluate(self, globalns, localns, recursive_guard=recursive_guard)
+    if sys.version_info >= (3, 13):
+        def _new_evaluate(self, globalns, localns, type_params, recursive_guard=frozenset()):
+            return _orig_evaluate(self, globalns, localns, recursive_guard=recursive_guard)
+    else:
+        def _new_evaluate(self, *args, **kwargs):
+            return _orig_evaluate(self, *args, **kwargs)
 
     typing.ForwardRef._evaluate = _new_evaluate

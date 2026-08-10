@@ -1,15 +1,12 @@
-from __future__ import annotations
 import os
 from typing import List
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseSettings
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
     DATABASE_URL: str
     JWT_SECRET: str
     FOUNDER_KEY: str
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:5173", "https://os-ai-frontend-v2.pages.dev"]   # ← tighten for production
+    ALLOWED_ORIGINS: List[str] = ["*"]
 
     RESEND_API_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
@@ -28,7 +25,9 @@ class Settings(BaseSettings):
     MEMORY_RETRIEVAL_LIMIT: int = 5
 
     COINGECKO_KEY: str = ""
+    COINGECKO_KEY: str = ""
     NEWS_API_KEY: str = ""
+    GNEWS_API_KEY: str = ""
     SERPAPI_KEY: str = ""
     ONEINCH_API_KEY: str = ""
     ONEINCH_BASE_URL: str = "https://business.1inch.com/swap/v5.0"
@@ -51,7 +50,6 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     SUPPORTED_CHAINS: List[str] = ["polygon", "ethereum", "bsc", "arbitrum", "base", "bitcoin"]
 
-    # Cloudflare AI (optional)
     CLOUDFLARE_ACCOUNT_ID: str = ""
     CLOUDFLARE_API_KEY: str = ""
 
@@ -67,6 +65,11 @@ class Settings(BaseSettings):
             "base": "base-mainnet",
         }
         return f"https://{alchemy_chain_map.get(chain, 'eth-mainnet')}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}"
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
 
 settings = Settings()
 

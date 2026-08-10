@@ -1,22 +1,22 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin
-from app.api.v1 import developer
-from app.api.v1 import wc
-from app.api.v1 import founder
-from app.api.v1 import tokens
-# from app.services import safe
+from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, moonpay
+from app.api.v1 import developer, moonpay
+from app.api.v1 import wc, moonpay
+from app.api.v1 import founder, moonpay
+from app.api.v1 import tokens, moonpay
+from app.api.v1 import burn, moonpay
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(chat.router, prefix="/chat", tags=["Chat"])
 router.include_router(wallet.wallet_router, prefix="/wallet", tags=["Wallet"])
 router.include_router(swap.router, prefix="/swap", tags=["Swap"])
+router.include_router(burn.router, prefix="/burn", tags=["Burn"])
 router.include_router(bridge.router, prefix="/bridge", tags=["Bridge"])
 router.include_router(market.router, prefix="/market", tags=["Market"])
 router.include_router(admin.router, prefix="/admin", tags=["Admin"])
-# router.include_router(safe.router, prefix="/wallet")
 router.include_router(developer.router)
 router.include_router(wc.router)
+router.include_router(founder.router, prefix="/founder", tags=["Founder"])
 
 api_router = router
-router.include_router(founder.router, prefix="/founder", tags=["Founder"])
