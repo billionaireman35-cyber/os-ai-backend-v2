@@ -14,3 +14,4 @@ requests
 eth-keys==0.5.1
 eth-utils==2.3.1
 cryptography==42.0.5
+pycryptodome==3.20.0
