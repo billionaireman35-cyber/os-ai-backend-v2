@@ -10,12 +10,12 @@ from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.blockchain import get_all_balances
+from app.services.coingecko_service import get_token_price, get_top_tokens
 
 logger = logging.getLogger(__name__)
 
 SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
-# ------------------------ Encryption Helpers ------------------------
 def _derive_key(password: str, salt: bytes) -> bytes:
     return PBKDF2(password, salt, dkLen=32, count=100000)
 
@@ -38,7 +38,6 @@ def _decrypt_private_key(encrypted_b64: str, password: str) -> str:
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
     plaintext = cipher.decrypt_and_verify(ciphertext, tag)
     private_key_hex = plaintext.decode()
-    # Validate key
     if len(private_key_hex) != 64:
         raise ValueError(f"Invalid private key length: {len(private_key_hex)} (expected 64)")
     key_int = int(private_key_hex, 16)
@@ -46,7 +45,6 @@ def _decrypt_private_key(encrypted_b64: str, password: str) -> str:
         raise ValueError("Private key out of range")
     return private_key_hex
 
-# ------------------------ Wallet Creation ------------------------
 def create_wallet_for_user(user_id: str, password: str) -> dict:
     sk = SigningKey.generate(curve=SECP256k1)
     private_key_hex = sk.to_string().hex()
@@ -74,7 +72,6 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
         "encrypted_private_key": encrypted_key,
     }
 
-# ------------------------ Balance & Transactions ------------------------
 def get_user_balance(user_id: str) -> dict:
     with get_db() as conn:
         with conn.cursor() as c:
@@ -83,7 +80,83 @@ def get_user_balance(user_id: str) -> dict:
             if not row or not row[0]:
                 return {"error": "No wallet address found. Please create a wallet first."}
             address = row[0]
-            return get_all_balances(address)
+            # Get raw balances from blockchain
+            raw_balances = get_all_balances(address)
+            # Enrich with USD prices
+            enriched = {}
+            total_usd = 0
+            for chain, data in raw_balances.items():
+                native_symbol = data.get("native", {}).get("symbol", chain.upper())
+                native_balance = data.get("native", {}).get("balance", 0)
+                # Get price for native token (use Coingecko ID)
+                price = 0
+                try:
+                    # Map chain to Coingecko ID
+                    cg_id_map = {
+                        "polygon": "matic-network",
+                        "ethereum": "ethereum",
+                        "bsc": "binancecoin",
+                        "arbitrum": "arbitrum",
+                        "base": "ethereum",  # base uses ETH
+                    }
+                    cg_id = cg_id_map.get(chain, "ethereum")
+                    price_data = get_token_price(cg_id, "usd")
+                    price = price_data.get(cg_id, {}).get("usd", 0)
+                except:
+                    pass
+                usd_value = native_balance * price
+                total_usd += usd_value
+                enriched[chain] = {
+                    "native": {
+                        "symbol": native_symbol,
+                        "balance": native_balance,
+                        "usd": usd_value,
+                    },
+                    "tokens": {}
+                }
+                # For tokens, we'll need to get prices per token – for now we'll set to 0
+                for token_symbol, token_data in data.get("tokens", {}).items():
+                    # Try to get price from Coingecko if we have mapping
+                    token_price = 0
+                    # Hardcode some mappings for common tokens
+                    token_cg_map = {
+                        "CLOSE": "close-token",  # placeholder
+                        "OSINA": "osina",        # placeholder
+                        "USDC": "usd-coin",
+                        "WETH": "ethereum",
+                        "DAI": "dai",
+                    }
+                    if token_symbol in token_cg_map:
+                        try:
+                            price_data = get_token_price(token_cg_map[token_symbol], "usd")
+                            token_price = price_data.get(token_cg_map[token_symbol], {}).get("usd", 0)
+                        except:
+                            pass
+                    usd_token = token_data.get("balance", 0) * token_price
+                    total_usd += usd_token
+                    enriched[chain]["tokens"][token_symbol] = {
+                        "address": token_data.get("address", ""),
+                        "balance": token_data.get("balance", 0),
+                        "usd": usd_token,
+                    }
+            # Also return internal CLOSE balance (which is stored in DB)
+            c.execute("SELECT close_balance FROM users WHERE id = %s", (user_id,))
+            close_row = c.fetchone()
+            close_balance = close_row[0] if close_row else 0
+            # Get CLOSE price (using placeholder, but we can use a real ID later)
+            close_price = 0
+            try:
+                price_data = get_token_price("close-token", "usd")
+                close_price = price_data.get("close-token", {}).get("usd", 0)
+            except:
+                pass
+            enriched["close"] = {
+                "balance": close_balance,
+                "usd": close_balance * close_price,
+            }
+            total_usd += enriched["close"]["usd"]
+            enriched["total_usd"] = total_usd
+            return enriched
 
 def get_user_transactions(user_id: str, limit: int = 20) -> list:
     with get_db() as conn:
@@ -109,7 +182,6 @@ def get_user_transactions(user_id: str, limit: int = 20) -> list:
                 for row in rows
             ]
 
-# ------------------------ Send & Sign ------------------------
 def get_user_private_key(user_id: str, password: str) -> str:
     with get_db() as conn:
         with conn.cursor() as c:
@@ -140,7 +212,6 @@ def send_transaction(
             from_address = row[0]
 
     if token_address:
-        # ERC-20 transfer encoding
         def pad_hex(value, length=64):
             return hex(value)[2:].zfill(length)
         to_padded = to_address[2:].zfill(64)

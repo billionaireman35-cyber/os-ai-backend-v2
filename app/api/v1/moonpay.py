@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from fastapi import APIRouter, Depends, HTTPException, Body
 from app.core.security import get_current_user
 from app.services.moonpay_service import generate_buy_url, generate_sell_url
+from app.core.config import settings
 import logging
 
 router = APIRouter()

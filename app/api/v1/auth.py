@@ -31,11 +31,9 @@ async def send_verification_code(req: SendCodeRequest, background_tasks: Backgro
                 SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at, attempts = 0
             """, (email, code, req.purpose, now_utc() + timedelta(minutes=15)))
             conn.commit()
-    # Send email in background (always, but may fail for unverified domains)
     background_tasks.add_task(send_verification_email, email, code, req.purpose)
 
     response = {"sent": True, "message": "Verification code sent", "expires_in": 900}
-    # For staging/development, return the code so frontend can auto-fill
     if settings.ENVIRONMENT in ("development", "staging"):
         response["code"] = code
         logger.info(f"📧 Staging/Dev: code for {email} is {code}")
@@ -76,25 +74,14 @@ async def register(req: RegisterRequest):
         raise HTTPException(400, "Password must be at least 8 characters")
     with get_db() as conn:
         with conn.cursor() as c:
-            # If we're in staging/development, we can accept any 6-digit code (bypass email check)
-            # but still verify it exists in DB? Actually, for staging we just want it to work.
-            # We'll still check the database, but we also allow the code to be automatically
-            # verified if we returned it from send-code.
-            c.execute(
-                "SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose = 'verification'",
-                (req.email,)
-            )
+            c.execute("SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose = 'verification'", (req.email,))
             row = c.fetchone()
             if not row:
-                # If in staging/development, we can create the code on the fly? No, better to fail.
-                # But we can relax: if ENVIRONMENT is staging, we accept any 6-digit code
-                # and skip DB verification.
                 if settings.ENVIRONMENT in ("development", "staging"):
-                    # Accept any 6-digit code for staging (only)
-                    if len(req.verification_code) != 6 or not req.verification_code.isdigit():
+                    if len(req.verification_code) == 6 and req.verification_code.isdigit():
+                        pass
+                    else:
                         raise HTTPException(400, "Verification code must be 6 digits")
-                    # Skip DB check – we trust the frontend
-                    logger.info(f"⚠️ Staging bypass: accepting code {req.verification_code} for {req.email}")
                 else:
                     raise HTTPException(400, "Invalid or expired verification code")
             else:
@@ -104,11 +91,9 @@ async def register(req: RegisterRequest):
                     raise HTTPException(400, "Verification code expired. Request a new one.")
                 if not hmac.compare_digest(stored_code, req.verification_code):
                     raise HTTPException(400, "Invalid verification code")
-                # Delete the code after successful use
                 c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose = 'verification'", (req.email,))
                 conn.commit()
 
-            # Check if user already exists
             c.execute("SELECT id FROM users WHERE email = %s", (req.email,))
             if c.fetchone():
                 raise HTTPException(400, "Email already registered")
@@ -149,6 +134,7 @@ async def login(req: LoginRequest):
                 raise HTTPException(403, "Founder account must use the founder login portal")
             if req.fingerprint:
                 c.execute("UPDATE users SET device_fingerprint = %s, fingerprint_verified = TRUE WHERE id = %s", (req.fingerprint, user_id))
+            # REMOVED: any UPDATE users SET close_balance = close_balance + X
             token = create_token(user_id)
             c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
                       (user_id, token, now_utc() + timedelta(days=30)))
@@ -201,7 +187,6 @@ async def forgot_password(req: dict, background_tasks: BackgroundTasks):
                 """, (email, code, now_utc() + timedelta(minutes=15)))
                 conn.commit()
                 background_tasks.add_task(send_verification_email, email, code, "password_reset")
-                # For staging, return code
                 if settings.ENVIRONMENT in ("development", "staging"):
                     return {"message": "If the account exists, a reset code has been sent.", "code": code}
     return {"message": "If the account exists, a reset code has been sent."}
@@ -218,9 +203,7 @@ async def reset_password(req: dict):
             c.execute("SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose='password_reset' AND expires_at > NOW()", (email,))
             row = c.fetchone()
             if not row:
-                # In staging, we can accept any code if we returned it
                 if settings.ENVIRONMENT in ("development", "staging"):
-                    # Allow if code length = 6 and digits
                     if len(code) == 6 and code.isdigit():
                         pass
                     else:
