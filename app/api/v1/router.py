@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, moonpay
-from app.api.v1 import developer, wc, founder, burn, workspace, notifications, leaderboard
+from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, moonpay, founder
+from app.api.v1 import developer, wc, founder, burn, workspace, notifications, leaderboard, founder
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
