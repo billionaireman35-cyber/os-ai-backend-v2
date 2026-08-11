@@ -9,7 +9,7 @@ from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.blockchain import get_all_balances, get_token_balance
+from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution
 from app.services.coingecko_service import get_token_price
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,15 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
                 WHERE id = %s
             """, (address, encrypted_key, settings.FREE_CLOSE_AMOUNT, user_id))
             conn.commit()
+
+    # 🔥 Send 500 CLOSE on‑chain from distribution wallet
+    try:
+        tx_hash = send_close_from_distribution(address, settings.FREE_CLOSE_AMOUNT)
+        logger.info(f"Sent {settings.FREE_CLOSE_AMOUNT} CLOSE to {address} tx: {tx_hash}")
+    except Exception as e:
+        logger.error(f"Failed to send on‑chain CLOSE: {e}")
+        # We still want to return the wallet, but maybe we can retry later.
+
     return {
         "address": address,
         "encrypted_private_key": encrypted_key,
@@ -138,8 +147,7 @@ def get_user_balance(user_id: str) -> dict:
                         "usd": usd_token,
                     }
 
-            # Do NOT add an internal "close" field – the on‑chain CLOSE is already in the tokens.
-            # The internal balance is only shown in the sidebar.
+            # The internal close_balance is used for chat burns; we keep it separate.
             enriched["total_usd"] = total_usd
             return enriched
 
