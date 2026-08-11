@@ -1,154 +1,152 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from app.core.security import get_current_user, hash_password, verify_password
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from app.core.security import get_current_user
 from app.core.database import get_db
-from app.services.blockchain import burn_close_onchain, broadcast_signed_transaction
-from app.services.ai import call_ai_model
-from app.core.config import settings
-import uuid
-import json
-import secrets
-import string
-import logging
-from datetime import datetime, timedelta
+import uuid, logging
+from datetime import datetime, timezone
 
-router = APIRouter(prefix="/workspace", tags=["Hustle Hub"])
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
-HUB_FEE = 1000  # CLOSE tokens
-
-def generate_room_code():
-    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
-
 @router.post("/create")
-async def create_workspace(req: dict, user=Depends(get_current_user)):
+async def create_workspace(
+    name: str = Body(...),
+    description: str = Body(""),
+    is_public: bool = Body(True),
+    user=Depends(get_current_user)
+):
     if not user:
         raise HTTPException(401, "Authentication required")
-    
-    name = req.get("name", "My Hustle Hub")
-    description = req.get("description", "")
-    password = req.get("password", "")
-    is_public = req.get("is_public", True)
-    
-    # Check balance
-    close_balance = user.get("close_balance", 0)
-    if close_balance < HUB_FEE:
-        raise HTTPException(400, f"Insufficient CLOSE balance. Need {HUB_FEE} CLOSE to create a Hub.")
-    
-    room_code = generate_room_code()
+    room_code = ''.join(uuid.uuid4().hex[:8].upper())
     workspace_id = str(uuid.uuid4())
-    
-    # Deduct CLOSE optimistically
     with get_db() as conn:
         with conn.cursor() as c:
-            # Check if user already owns a workspace with this name
-            c.execute("SELECT id FROM workspaces WHERE owner_id = %s AND name = %s AND status != 'deleted'", (user["id"], name))
-            if c.fetchone():
-                raise HTTPException(400, "Hub with this name already exists")
-            
-            # Create workspace with pending status
             c.execute("""
-                INSERT INTO workspaces (id, name, description, room_code, password_hash, owner_id, is_public, status, fee_paid)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (workspace_id, name, description, room_code, hash_password(password) if password else None, user["id"], is_public, "pending", False))
-            
-            # Add owner as member with pending status
-            c.execute("""
-                INSERT INTO workspace_members (workspace_id, user_id, role, status)
-                VALUES (%s, %s, %s, %s)
-            """, (workspace_id, user["id"], "owner", "active"))  # owner doesn't pay
-            
-            # Deduct CLOSE balance
-            c.execute("UPDATE users SET close_balance = close_balance - %s WHERE id = %s", (HUB_FEE, user["id"]))
-            
-            # Insert transaction
-            c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, status, reference_id)
+                INSERT INTO workspaces (id, name, description, room_code, owner_id, is_public)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (str(uuid.uuid4()), user["id"], "hub_create", HUB_FEE, "pending", workspace_id))
-            
+            """, (workspace_id, name, description, room_code, user["id"], is_public))
+            # Add owner as member with role 'admin'
+            c.execute("""
+                INSERT INTO workspace_members (workspace_id, user_id, role)
+                VALUES (%s, %s, %s)
+            """, (workspace_id, user["id"], "admin"))
             conn.commit()
-    
-    # Return burn payload for frontend
     return {
-        "workspace_id": workspace_id,
+        "id": workspace_id,
         "name": name,
+        "description": description,
         "room_code": room_code,
-        "message": "Hub created. Please sign the burn transaction to activate it.",
-        "burn_payload": {
-            "contract": settings.CLOSE_CONTRACT_ADDRESS,
-            "amount": HUB_FEE,
-            "chain": "polygon",
-            "reference_id": workspace_id,
-            "action": "hub_create"
-        }
+        "owner_id": user["id"],
+        "is_public": is_public,
+        "members": [{"user_id": user["id"], "role": "admin"}]
     }
+
+@router.get("/list")
+async def list_workspaces(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT w.id, w.name, w.description, w.room_code, w.owner_id, w.is_public, w.created_at,
+                       (SELECT COUNT(*) FROM workspace_members WHERE workspace_id = w.id) as member_count
+                FROM workspaces w
+                LEFT JOIN workspace_members m ON w.id = m.workspace_id
+                WHERE w.is_public = TRUE OR m.user_id = %s
+                GROUP BY w.id
+                ORDER BY w.created_at DESC
+            """, (user["id"],))
+            rows = c.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2],
+                    "room_code": row[3],
+                    "owner_id": row[4],
+                    "is_public": row[5],
+                    "created_at": row[6].isoformat() if row[6] else None,
+                    "member_count": row[7],
+                    "is_member": True  # since we filtered
+                }
+                for row in rows
+            ]
 
 @router.post("/join")
-async def join_workspace(req: dict, user=Depends(get_current_user)):
+async def join_workspace(
+    room_code: str = Body(...),
+    user=Depends(get_current_user)
+):
     if not user:
         raise HTTPException(401, "Authentication required")
-    
-    room_code = req.get("room_code", "").upper().strip()
-    password = req.get("password", "")
-    
-    # Check balance
-    close_balance = user.get("close_balance", 0)
-    if close_balance < HUB_FEE:
-        raise HTTPException(400, f"Insufficient CLOSE balance. Need {HUB_FEE} CLOSE to join a Hub.")
-    
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("""
-                SELECT id, name, password_hash, owner_id, is_public, status
-                FROM workspaces
-                WHERE room_code = %s AND status != 'deleted'
-            """, (room_code,))
+            c.execute("SELECT id FROM workspaces WHERE room_code = %s", (room_code.upper(),))
             row = c.fetchone()
             if not row:
-                raise HTTPException(404, "Hub not found")
-            
-            workspace_id, workspace_name, password_hash, owner_id, is_public, workspace_status = row
-            
-            if workspace_status != "active":
-                raise HTTPException(400, "Hub is not active yet")
-            
-            # Verify password if set
-            if password_hash and not verify_password(password, password_hash):
-                raise HTTPException(403, "Incorrect password")
-            
+                raise HTTPException(404, "Workspace not found")
+            workspace_id = row[0]
             # Check if already member
-            c.execute("SELECT 1 FROM workspace_members WHERE workspace_id = %s AND user_id = %s", (workspace_id, user["id"]))
+            c.execute("SELECT user_id FROM workspace_members WHERE workspace_id = %s AND user_id = %s", (workspace_id, user["id"]))
             if c.fetchone():
-                raise HTTPException(400, "Already a member")
-            
-            # Deduct CLOSE
-            c.execute("UPDATE users SET close_balance = close_balance - %s WHERE id = %s", (HUB_FEE, user["id"]))
-            
-            # Add member with pending status
-            c.execute("""
-                INSERT INTO workspace_members (workspace_id, user_id, role, status)
-                VALUES (%s, %s, %s, %s)
-            """, (workspace_id, user["id"], "member", "pending"))
-            
-            # Insert transaction
-            membership_id = str(uuid.uuid4())
-            c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, status, reference_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (membership_id, user["id"], "hub_join", HUB_FEE, "pending", workspace_id))
-            
+                return {"message": "Already a member"}
+            c.execute("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (%s, %s, %s)", (workspace_id, user["id"], "member"))
             conn.commit()
-    
-    return {
-        "workspace_id": workspace_id,
-        "workspace_name": workspace_name,
-        "message": "Joined Hub. Please sign the burn transaction to activate membership.",
-        "burn_payload": {
-            "contract": settings.CLOSE_CONTRACT_ADDRESS,
-            "amount": HUB_FEE,
-            "chain": "polygon",
-            "reference_id": workspace_id,
-            "action": "hub_join",
-            "user_id": user["id"]
-        }
-    }
+    return {"message": "Joined workspace"}
+
+@router.get("/{workspace_id}/messages")
+async def get_workspace_messages(
+    workspace_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            # Check membership
+            c.execute("SELECT user_id FROM workspace_members WHERE workspace_id = %s AND user_id = %s", (workspace_id, user["id"]))
+            if not c.fetchone():
+                raise HTTPException(403, "Not a member of this workspace")
+            c.execute("""
+                SELECT id, user_id, content, is_ai, created_at
+                FROM workspace_messages
+                WHERE workspace_id = %s
+                ORDER BY created_at ASC
+                LIMIT %s
+            """, (workspace_id, limit))
+            rows = c.fetchall()
+            # Also fetch user names
+            messages = []
+            for row in rows:
+                c.execute("SELECT name FROM users WHERE id = %s", (row[1],))
+                user_row = c.fetchone()
+                messages.append({
+                    "id": row[0],
+                    "user_id": row[1],
+                    "user_name": user_row[0] if user_row else "Unknown",
+                    "content": row[2],
+                    "is_ai": row[3],
+                    "created_at": row[4].isoformat() if row[4] else None
+                })
+            return messages
+
+@router.post("/{workspace_id}/message")
+async def send_workspace_message(
+    workspace_id: str,
+    content: str = Body(...),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT user_id FROM workspace_members WHERE workspace_id = %s AND user_id = %s", (workspace_id, user["id"]))
+            if not c.fetchone():
+                raise HTTPException(403, "Not a member of this workspace")
+            msg_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO workspace_messages (id, workspace_id, user_id, content)
+                VALUES (%s, %s, %s, %s)
+            """, (msg_id, workspace_id, user["id"], content))
+            conn.commit()
+    return {"id": msg_id, "content": content, "user_id": user["id"], "user_name": user.get("name", "User")}
