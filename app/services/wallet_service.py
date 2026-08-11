@@ -9,8 +9,8 @@ from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.blockchain import get_all_balances
-from app.services.coingecko_service import get_token_price, get_top_tokens
+from app.services.blockchain import get_all_balances, get_token_balance
+from app.services.coingecko_service import get_token_price
 
 logger = logging.getLogger(__name__)
 
@@ -75,29 +75,28 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
 def get_user_balance(user_id: str) -> dict:
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            c.execute("SELECT wallet_address, close_balance FROM users WHERE id = %s", (user_id,))
             row = c.fetchone()
             if not row or not row[0]:
                 return {"error": "No wallet address found. Please create a wallet first."}
             address = row[0]
-            # Get raw balances from blockchain
+
+            # Fetch all on‑chain balances (native + tokens)
             raw_balances = get_all_balances(address)
-            # Enrich with USD prices
             enriched = {}
             total_usd = 0
+
             for chain, data in raw_balances.items():
                 native_symbol = data.get("native", {}).get("symbol", chain.upper())
                 native_balance = data.get("native", {}).get("balance", 0)
-                # Get price for native token (use Coingecko ID)
                 price = 0
                 try:
-                    # Map chain to Coingecko ID
                     cg_id_map = {
                         "polygon": "matic-network",
                         "ethereum": "ethereum",
                         "bsc": "binancecoin",
                         "arbitrum": "arbitrum",
-                        "base": "ethereum",  # base uses ETH
+                        "base": "ethereum",
                     }
                     cg_id = cg_id_map.get(chain, "ethereum")
                     price_data = get_token_price(cg_id, "usd")
@@ -106,6 +105,7 @@ def get_user_balance(user_id: str) -> dict:
                     pass
                 usd_value = native_balance * price
                 total_usd += usd_value
+
                 enriched[chain] = {
                     "native": {
                         "symbol": native_symbol,
@@ -114,14 +114,12 @@ def get_user_balance(user_id: str) -> dict:
                     },
                     "tokens": {}
                 }
-                # For tokens, we'll need to get prices per token – for now we'll set to 0
+
                 for token_symbol, token_data in data.get("tokens", {}).items():
-                    # Try to get price from Coingecko if we have mapping
                     token_price = 0
-                    # Hardcode some mappings for common tokens
                     token_cg_map = {
-                        "CLOSE": "close-token",  # placeholder
-                        "OSINA": "osina",        # placeholder
+                        "CLOSE": "close-token",
+                        "OSINA": "osina",
                         "USDC": "usd-coin",
                         "WETH": "ethereum",
                         "DAI": "dai",
@@ -139,22 +137,9 @@ def get_user_balance(user_id: str) -> dict:
                         "balance": token_data.get("balance", 0),
                         "usd": usd_token,
                     }
-            # Also return internal CLOSE balance (which is stored in DB)
-            c.execute("SELECT close_balance FROM users WHERE id = %s", (user_id,))
-            close_row = c.fetchone()
-            close_balance = close_row[0] if close_row else 0
-            # Get CLOSE price (using placeholder, but we can use a real ID later)
-            close_price = 0
-            try:
-                price_data = get_token_price("close-token", "usd")
-                close_price = price_data.get("close-token", {}).get("usd", 0)
-            except:
-                pass
-            enriched["close"] = {
-                "balance": close_balance,
-                "usd": close_balance * close_price,
-            }
-            total_usd += enriched["close"]["usd"]
+
+            # Do NOT add an internal "close" field – the on‑chain CLOSE is already in the tokens.
+            # The internal balance is only shown in the sidebar.
             enriched["total_usd"] = total_usd
             return enriched
 

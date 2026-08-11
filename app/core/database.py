@@ -57,9 +57,11 @@ def init_db():
                         device_fingerprint TEXT,
                         fingerprint_verified BOOLEAN DEFAULT FALSE,
                         last_active TIMESTAMP DEFAULT NOW(),
-                        created_at TIMESTAMP DEFAULT NOW()
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        profile_picture TEXT
                     )
                 """)
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -69,6 +71,7 @@ def init_db():
                         created_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS verification_codes (
                         email TEXT NOT NULL,
@@ -92,6 +95,7 @@ def init_db():
                         updated TIMESTAMP DEFAULT NOW()
                     )
                 """)
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS chat_messages (
                         id TEXT PRIMARY KEY,
@@ -102,9 +106,13 @@ def init_db():
                         content TEXT,
                         model TEXT,
                         close_burned BIGINT DEFAULT 0,
-                        created TIMESTAMP DEFAULT NOW()
+                        created TIMESTAMP DEFAULT NOW(),
+                        reactions JSONB DEFAULT '{}',
+                        edited_at TIMESTAMP,
+                        deleted_at TIMESTAMP
                     )
                 """)
+
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS memories (
                         id TEXT PRIMARY KEY,
@@ -255,12 +263,27 @@ def init_db():
                     )
                 """)
 
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS push_subscriptions (
+                        id UUID PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        endpoint TEXT NOT NULL,
+                        auth_key TEXT NOT NULL,
+                        p256dh_key TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
                 # Additional columns for existing tables (safe to run)
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
                 c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
                 c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
+                c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '{}'")
+                c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP")
+                c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP")
+                c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT")
 
                 conn.commit()
         logger.info("✅ Database initialized successfully")

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, moonpay
-from app.api.v1 import developer, wc, founder, burn, workspace
+from app.api.v1 import developer, wc, founder, burn, workspace, notifications, leaderboard
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
@@ -11,6 +11,8 @@ router.include_router(burn.router, prefix="/burn", tags=["Burn"])
 router.include_router(bridge.router, prefix="/bridge", tags=["Bridge"])
 router.include_router(market.router, prefix="/market", tags=["Market"])
 router.include_router(moonpay.router, prefix="/moonpay", tags=["MoonPay"])
+router.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
+router.include_router(leaderboard.router, prefix="/leaderboard", tags=["Leaderboard"])
 router.include_router(workspace.router, prefix="/workspace", tags=["Workspace"])
 router.include_router(admin.router, prefix="/admin", tags=["Admin"])
 router.include_router(developer.router)

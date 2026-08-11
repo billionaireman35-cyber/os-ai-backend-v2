@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Body, Body
 from app.models.schemas import SendCodeRequest, VerifyCodeRequest, RegisterRequest, LoginRequest
 from app.core.database import get_db
 from app.core.security import create_token, verify_password, hash_password, now_utc, get_current_user
@@ -247,3 +247,19 @@ async def update_profile(req: dict, user=Depends(get_current_user)):
                 "is_founder": row[7] or False,
             }
             return {"user": updated_user}
+
+@router.post("/profile-picture")
+async def upload_profile_picture(
+    data: dict = Body(...),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    picture = data.get("picture")
+    if not picture or not picture.startswith("data:image"):
+        raise HTTPException(400, "Invalid image data")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("UPDATE users SET profile_picture = %s WHERE id = %s", (picture, user["id"]))
+            conn.commit()
+    return {"message": "Profile picture updated"}
