@@ -3,20 +3,17 @@ uvicorn==0.30.0
 pg8000==1.30.5
 pydantic==1.10.13
 python-dotenv==1.0.0
-
-# Web3 5.x – compatible with Pydantic v1
 web3==5.31.3
-eth-abi==2.2.0
+eth-account==0.8.0
+eth-abi>=3.0.1,<4
 eth-utils==1.10.0
 eth-keys==0.3.4
 eth-keyfile==0.5.1
 eth-hash==0.3.2
-
-# Other dependencies
 httpx==0.27.0
 bcrypt==4.1.1
 resend==2.34.0
-websockets<10,>=9.1   # <-- FIXED: web3 5.31.3 requires <10
+websockets==12.0
 setuptools==69.5.1
 wheel==0.43.0
 typing-extensions==4.12.2
