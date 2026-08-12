@@ -23,4 +23,3 @@ typing-extensions==4.12.2
 requests
 pycryptodome
 ecdsa
-parsimonious>=0.10.0
