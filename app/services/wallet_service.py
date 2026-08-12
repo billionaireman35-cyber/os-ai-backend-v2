@@ -9,7 +9,7 @@ from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution
+from app.services.blockchain import get_all_balances, get_token_balance
 from app.services.coingecko_service import get_token_price
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,6 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
         logger.info(f"Sent {settings.FREE_CLOSE_AMOUNT} CLOSE to {address} tx: {tx_hash}")
     except Exception as e:
         logger.error(f"Failed to send on‑chain CLOSE: {e}")
-        # We still want to return the wallet, but maybe we can retry later.
 
     return {
         "address": address,
@@ -89,8 +88,9 @@ def get_user_balance(user_id: str) -> dict:
             if not row or not row[0]:
                 return {"error": "No wallet address found. Please create a wallet first."}
             address = row[0]
+            internal_close_balance = row[1] or 0
 
-            # Fetch all on‑chain balances (native + tokens)
+            # 🔥 Fetch on‑chain balances (native + tokens)
             raw_balances = get_all_balances(address)
             enriched = {}
             total_usd = 0
@@ -147,7 +147,21 @@ def get_user_balance(user_id: str) -> dict:
                         "usd": usd_token,
                     }
 
-            # The internal close_balance is used for chat burns; we keep it separate.
+            # ✅ Include internal CLOSE balance as a separate field
+            # Get CLOSE price (same as above)
+            close_price = 0
+            try:
+                price_data = get_token_price("close-token", "usd")
+                close_price = price_data.get("close-token", {}).get("usd", 0)
+            except:
+                pass
+            close_usd = internal_close_balance * close_price
+            total_usd += close_usd
+
+            enriched["close"] = {
+                "balance": internal_close_balance,
+                "usd": close_usd,
+            }
             enriched["total_usd"] = total_usd
             return enriched
 
