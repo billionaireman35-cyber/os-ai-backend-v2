@@ -421,7 +421,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[0] = f"{model} (OpenRouter)"
+                        model_store[:] = [f"{model} (OpenRouter)"]
                     return
             except Exception as e:
                 logger.error(f"OpenRouter streaming error: {e}")
@@ -433,7 +433,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[0] = f"{model} (OpenRouter, partial)"
+                        model_store[:] = [f"{model} (OpenRouter, partial)"]
                     return
                 # else: nothing sent yet — safe to fall through to the next provider
 
@@ -477,7 +477,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[0] = "Llama 3.3 70B (Groq)"
+                        model_store[:] = ["Llama 3.3 70B (Groq)"]
                     return
             except Exception as e:
                 logger.error(f"Groq streaming error: {e}")
@@ -486,7 +486,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[0] = "Llama 3.3 70B (Groq, partial)"
+                        model_store[:] = ["Llama 3.3 70B (Groq, partial)"]
                     return
 
     if not any_content_yielded:
@@ -495,4 +495,4 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
         if user_id:
             store_memory(user_id, error_msg, messages[-1]["content"])
         if model_store is not None:
-            model_store[0] = "fallback"
+            model_store[:] = ["fallback"]
