@@ -54,13 +54,13 @@ async def get_notifications(
                     "description": f"{row[1]} on {row[2]} - {row[3]}",
                 })
 
-            # 3. Workspace invites (pending)
+            # 3. Workspace invites (pending) – FIX: use joined_at instead of created_at
             c.execute("""
-                SELECT w.name, wm.created_at, wm.status
+                SELECT w.name, wm.joined_at, wm.status
                 FROM workspace_members wm
                 JOIN workspaces w ON wm.workspace_id = w.id
                 WHERE wm.user_id = %s AND wm.status = 'pending'
-                ORDER BY wm.created_at DESC
+                ORDER BY wm.joined_at DESC
                 LIMIT 3
             """, (user_id,))
             rows = c.fetchall()
@@ -71,8 +71,6 @@ async def get_notifications(
                     "title": f"Invited to {row[0]}",
                     "description": f"Status: {row[2]}",
                 })
-
-            # 4. AI messages? Skip to avoid noise.
 
             # Sort by created_at descending
             notifications.sort(key=lambda x: x["created_at"] or "", reverse=True)
