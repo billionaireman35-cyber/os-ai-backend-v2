@@ -1,6 +1,7 @@
 import uuid
 import base64
 import hashlib
+from eth_utils import keccak
 import json
 import logging
 from Crypto.Cipher import AES
@@ -51,7 +52,7 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
     public_key = sk.get_verifying_key()
     public_key_bytes = public_key.to_string()
     import hashlib
-    address = "0x" + hashlib.sha256(public_key_bytes).hexdigest()[:40]
+    address = "0x" + keccak(public_key_bytes).hex()[-40:]
     encrypted_key = _encrypt_private_key(private_key_hex, password)
 
     with get_db() as conn:

@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     SAFE_TRANSACTION_SERVICE_URL: str = "https://safe-transaction-polygon.safe.global"
 
     ENVIRONMENT: str = "development"
-    SUPPORTED_CHAINS: List[str] = ["polygon", "ethereum", "bsc", "arbitrum", "base", "bitcoin"]
+    SUPPORTED_CHAINS: List[str] = ["polygon", "ethereum", "bsc", "arbitrum", "base"]  # "bitcoin" removed: no real BTC support exists yet (wrong address format, was silently querying Ethereum)
 
     CLOUDFLARE_ACCOUNT_ID: str = ""
     CLOUDFLARE_API_KEY: str = ""
