@@ -2,6 +2,7 @@ import uuid
 import base64
 import hashlib
 from eth_utils import keccak
+from web3 import Web3
 import json
 import logging
 from Crypto.Cipher import AES
@@ -10,7 +11,7 @@ from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.blockchain import get_all_balances, get_token_balance
+from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution
 from app.services.coingecko_service import get_token_price
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
     public_key = sk.get_verifying_key()
     public_key_bytes = public_key.to_string()
     import hashlib
-    address = "0x" + keccak(public_key_bytes).hex()[-40:]
+    address = Web3.to_checksum_address("0x" + keccak(public_key_bytes).hex()[-40:])
     encrypted_key = _encrypt_private_key(private_key_hex, password)
 
     with get_db() as conn:
@@ -246,3 +247,17 @@ def send_transaction(
             """, (str(uuid.uuid4()), user_id, "send", amount_wei, tx_hash, chain, "completed"))
             conn.commit()
     return tx_hash
+
+def decrypt_private_key(encrypted_key: str, password: str) -> str:
+    """Decrypt a private key using the same scheme as _encrypt_private_key."""
+    from Crypto.Cipher import AES
+    from Crypto.Protocol.KDF import PBKDF2
+    import base64, json
+    data = json.loads(base64.b64decode(encrypted_key).decode('utf-8'))
+    salt = bytes.fromhex(data['salt'])
+    iv = bytes.fromhex(data['iv'])
+    ciphertext = bytes.fromhex(data['ciphertext'])
+    key = PBKDF2(password, salt, dkLen=32, count=100000)
+    cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+    plaintext = cipher.decrypt(ciphertext)
+    return plaintext.decode('utf-8')

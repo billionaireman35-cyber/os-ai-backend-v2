@@ -40,6 +40,9 @@ def init_db():
     try:
         with get_db() as conn:
             with conn.cursor() as c:
+                # Advisory lock so concurrent workers/deploys can't run
+                # this DDL block at the same time and deadlock each other.
+                c.execute("SELECT pg_advisory_lock(918273645)")
                 c.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
                 c.execute("""
@@ -285,6 +288,7 @@ def init_db():
                 c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP")
                 c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT")
 
+                c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
         logger.info("✅ Database initialized successfully")
     except Exception as e:
