@@ -130,14 +130,39 @@ def get_token_balance(chain: str, token_address: str, wallet_address: str) -> fl
         balance_wei = contract.functions.balanceOf(wallet_address).call()
         return web3.from_wei(balance_wei, 'ether')
 
+SYMBOL_MAP = {
+    "polygon": "POL", "ethereum": "ETH", "bsc": "BNB",
+    "arbitrum": "ETH", "base": "ETH",
+}
+
 def get_all_balances(address: str) -> dict:
-    """Get native currency balances for all supported chains."""
+    """Get native + token balances for all supported chains, in the
+    nested shape wallet_service.get_user_balance() expects."""
     address = to_checksum_address(address)
-    balances = {}
+    result = {}
     for chain in settings.SUPPORTED_CHAINS:
         try:
-            bal = get_balance(chain, address)
-            balances[chain] = float(bal)
+            native_bal = float(get_balance(chain, address))
         except Exception:
-            balances[chain] = 0.0
-    return balances
+            native_bal = 0.0
+
+        result[chain] = {
+            "native": {"symbol": SYMBOL_MAP.get(chain, chain.upper()), "balance": native_bal},
+            "tokens": {}
+        }
+
+        if chain == "polygon":
+            token_list = [
+                {"symbol": "CLOSE", "address": settings.CLOSE_CONTRACT_ADDRESS},
+                {"symbol": "USDC", "address": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"},
+            ]
+            for token in token_list:
+                try:
+                    bal = get_token_balance(chain, token["address"], address)
+                    if bal > 0:
+                        result[chain]["tokens"][token["symbol"]] = {
+                            "address": token["address"], "balance": bal
+                        }
+                except Exception:
+                    pass
+    return result
