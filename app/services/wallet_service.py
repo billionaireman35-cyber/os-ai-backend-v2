@@ -1,8 +1,7 @@
 import uuid
 import base64
 import hashlib
-from eth_utils import keccak
-from web3 import Web3
+from eth_utils import keccak, to_checksum_address
 import json
 import logging
 from Crypto.Cipher import AES
@@ -53,7 +52,7 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
     public_key = sk.get_verifying_key()
     public_key_bytes = public_key.to_string()
     import hashlib
-    address = Web3.to_checksum_address("0x" + keccak(public_key_bytes).hex()[-40:])
+    address = to_checksum_address("0x" + keccak(public_key_bytes).hex()[-40:])
     encrypted_key = _encrypt_private_key(private_key_hex, password)
 
     with get_db() as conn:
