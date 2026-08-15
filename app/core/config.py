@@ -1,9 +1,13 @@
 import os
 from typing import List
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
 
 class Settings(BaseSettings):
-    model_config = {"extra": "ignore", "env_file": ".env", "env_file_encoding": "utf-8"}
+    class Config:
+        extra = "ignore"
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
     DATABASE_URL: str
     JWT_SECRET: str
     FOUNDER_KEY: str

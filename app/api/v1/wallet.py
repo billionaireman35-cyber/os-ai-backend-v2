@@ -7,6 +7,9 @@ from app.services.wallet_service import (
     send_transaction,
     get_user_private_key
 )
+from app.services.blockchain import burn_close
+from app.core.database import get_db
+import uuid
 import logging
 
 router = APIRouter()
@@ -54,6 +57,66 @@ async def create_wallet(
     except Exception as e:
         logger.error(f"Wallet creation failed: {e}")
         raise HTTPException(500, "Failed to create wallet")
+
+@router.post("/burn")
+async def burn(
+    amount: int = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be greater than 0")
+
+    # Verify the wallet password by attempting the same decrypt used for
+    # /send and /sign - a wrong password fails here, same as those routes.
+    try:
+        get_user_private_key(user["id"], password)
+    except Exception:
+        raise HTTPException(400, "Incorrect password")
+
+    user_id = user["id"]
+    burn_tx_id = str(uuid.uuid4())
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
+                (amount, user_id, amount)
+            )
+            if c.rowcount == 0:
+                raise HTTPException(402, "Insufficient CLOSE balance")
+            c.execute("""
+                INSERT INTO close_transactions (id, user_id, type, amount, status)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (burn_tx_id, user_id, "burn", amount, "pending"))
+            conn.commit()
+
+    try:
+        tx_hash = burn_close(amount)
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    "UPDATE close_transactions SET status = %s, tx_hash = %s WHERE id = %s",
+                    ("confirmed", tx_hash, burn_tx_id)
+                )
+                conn.commit()
+        return {"tx_hash": tx_hash}
+    except Exception as e:
+        logger.error(f"Manual burn failed: {e}")
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    "UPDATE users SET close_balance = close_balance + %s WHERE id = %s",
+                    (amount, user_id)
+                )
+                c.execute(
+                    "UPDATE close_transactions SET status = %s WHERE id = %s",
+                    ("failed", burn_tx_id)
+                )
+                conn.commit()
+        raise HTTPException(500, "Burn failed on-chain - your balance has been refunded")
 
 @router.post("/send")
 async def send(

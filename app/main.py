@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.api.v1 import burn
 import app.patch  # Apply ForwardRef patch before any other imports
 
 from fastapi import FastAPI
@@ -29,7 +28,6 @@ async def startup():
     init_db()
 
 app.include_router(api_router, prefix="/api")
-app.include_router(burn.router, prefix="/api/v1")
 
 @app.get("/health")
 async def health():

@@ -1,6 +1,7 @@
-.env
-__pycache__/
-*.pyc
-.env.local
-app_backup/
 *.bak
+*.pyc
+.env
+.env.local
+__pycache__/
+app_backup/
+contracts/node_modules/
