@@ -47,6 +47,15 @@ def _decrypt_private_key(encrypted_b64: str, password: str) -> str:
     return private_key_hex
 
 def create_wallet_for_user(user_id: str, password: str) -> dict:
+    # SECURITY: prevent creating multiple wallets / re-claiming the free
+    # CLOSE bonus by calling this endpoint repeatedly.
+    with get_db() as _check_conn:
+        with _check_conn.cursor() as _c:
+            _c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            _row = _c.fetchone()
+            if _row and _row[0]:
+                raise ValueError("User already has a wallet")
+
     sk = SigningKey.generate(curve=SECP256k1)
     private_key_hex = sk.to_string().hex()
     public_key = sk.get_verifying_key()

@@ -1,8 +1,9 @@
 import os
 from typing import List
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
+    model_config = {"extra": "ignore", "env_file": ".env", "env_file_encoding": "utf-8"}
     DATABASE_URL: str
     JWT_SECRET: str
     FOUNDER_KEY: str
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     MOONPAY_PUBLIC_KEY: str = ""
 
     CLOSE_CONTRACT_ADDRESS: str
+    CLOSE_STAKING_CONTRACT_ADDRESS: str = ""
     DISTRIBUTION_WALLET_ADDRESS: str
     DISTRIBUTION_WALLET_PRIVATE_KEY: str
 
@@ -65,11 +67,6 @@ class Settings(BaseSettings):
             "base": "base-mainnet",
         }
         return f"https://{alchemy_chain_map.get(chain, 'eth-mainnet')}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}"
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
 
 settings = Settings()
 

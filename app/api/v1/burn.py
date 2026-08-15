@@ -55,3 +55,8 @@ async def burn_tokens(amount: int, user=Depends(get_current_user)):
                 """, (burn_tx_id,))
                 conn.commit()
         raise HTTPException(500, f"Burn failed: {str(e)}")
+
+# Alias for frontend compatibility
+@router.post("/burn/burn")
+async def burn_tokens_alias(amount: int, user=Depends(get_current_user)):
+    return await burn_tokens(amount, user)

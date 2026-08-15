@@ -67,8 +67,13 @@ def broadcast_signed_transaction(web3, signed_tx):
     tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
     return web3.to_hex(tx_hash)
 
+DEAD_ADDRESS = to_checksum_address("0x000000000000000000000000000000000000dEaD")
+
 def burn_close(amount: int) -> str:
-    """Burn CLOSE tokens from the distribution wallet."""
+    """'Burn' CLOSE by sending to the dead address - nobody, including
+    CloseAI Technologies, holds its private key. This contract has no
+    native burn() function (confirmed by reading its verified source),
+    so this is the standard workaround real tokens use."""
     web3 = get_web3("polygon")
     contract_address = to_checksum_address(settings.CLOSE_CONTRACT_ADDRESS)
     from_address = to_checksum_address(settings.DISTRIBUTION_WALLET_ADDRESS)
@@ -77,9 +82,9 @@ def burn_close(amount: int) -> str:
     lock = get_wallet_lock(from_address)
     with lock:
         nonce = web3.eth.get_transaction_count(from_address, 'pending')
-        gas_estimate = contract.functions.burn(amount_wei).estimate_gas({'from': from_address})
+        gas_estimate = contract.functions.transfer(DEAD_ADDRESS, amount_wei).estimate_gas({'from': from_address})
         gas_limit = int(gas_estimate * 1.2)
-        tx = contract.functions.burn(amount_wei).build_transaction({
+        tx = contract.functions.transfer(DEAD_ADDRESS, amount_wei).build_transaction({
             'from': from_address,
             'nonce': nonce,
             'gas': gas_limit,
@@ -166,3 +171,52 @@ def get_all_balances(address: str) -> dict:
                 except Exception:
                     pass
     return result
+
+# ── CLOSE staking discount tiers ──────────────────────────────────────────
+STAKING_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "user", "type": "address"}],
+        "name": "getDiscountTier",
+        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
+_discount_tier_cache = {}
+_DISCOUNT_TIER_CACHE_TTL = 60  # seconds
+
+def get_discount_tier(user_address: str) -> int:
+    """Read the caller's staking discount tier (0-3) from CloseStaking.
+    Cached briefly to avoid an RPC call on every single chat message."""
+    import time
+    now = time.time()
+    cached = _discount_tier_cache.get(user_address)
+    if cached and (now - cached[1]) < _DISCOUNT_TIER_CACHE_TTL:
+        return cached[0]
+
+    if not getattr(settings, "CLOSE_STAKING_CONTRACT_ADDRESS", None):
+        return 0
+
+    try:
+        web3 = get_web3("polygon")
+        contract = web3.eth.contract(
+            address=to_checksum_address(settings.CLOSE_STAKING_CONTRACT_ADDRESS),
+            abi=STAKING_ABI
+        )
+        tier = contract.functions.getDiscountTier(to_checksum_address(user_address)).call()
+        _discount_tier_cache[user_address] = (tier, now)
+        return tier
+    except Exception:
+        return 0
+
+# Discount tier -> percent off BURN_PER_MESSAGE
+DISCOUNT_PERCENT_BY_TIER = {0: 0, 1: 5, 2: 15, 3: 30}
+
+def get_effective_burn_amount(user_address: str, base_amount: int) -> int:
+    """Apply the user's staking discount to a base CLOSE burn amount."""
+    if not user_address:
+        return base_amount
+    tier = get_discount_tier(user_address)
+    discount_pct = DISCOUNT_PERCENT_BY_TIER.get(tier, 0)
+    return max(1, int(base_amount * (100 - discount_pct) / 100))

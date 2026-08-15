@@ -7,7 +7,7 @@ from app.services.ai import call_ai_model, moderate_content, build_system_prompt
 from app.services.memory import get_memories, store_memory
 from app.services.transaction_parser import parse_transaction_intent
 from app.tasks.burn_worker import process_burn_task
-from app.services.blockchain import burn_close
+from app.services.blockchain import burn_close, get_effective_burn_amount
 from app.core.config import settings
 import uuid, logging, json, traceback
 
@@ -59,6 +59,8 @@ async def chat_endpoint(
             }
 
         user_id = user["id"]
+        wallet_address = user.get("wallet_address")
+        effective_burn = get_effective_burn_amount(wallet_address, settings.BURN_PER_MESSAGE)
         burn_tx_id = str(uuid.uuid4())
 
         # Atomic balance check + deduct
@@ -66,7 +68,7 @@ async def chat_endpoint(
             with conn.cursor() as c:
                 c.execute(
                     "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
-                    (settings.BURN_PER_MESSAGE, user_id, settings.BURN_PER_MESSAGE)
+                    (effective_burn, user_id, effective_burn)
                 )
                 if c.rowcount == 0:
                     return JSONResponse(
@@ -80,7 +82,7 @@ async def chat_endpoint(
                 c.execute("""
                     INSERT INTO close_transactions (id, user_id, type, amount, status)
                     VALUES (%s, %s, %s, %s, %s)
-                """, (burn_tx_id, user_id, "burn", settings.BURN_PER_MESSAGE, "pending"))
+                """, (burn_tx_id, user_id, "burn", effective_burn, "pending"))
                 c.execute("""
                     INSERT INTO chats (id, user_id, title) VALUES (%s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET updated = NOW()
@@ -126,22 +128,22 @@ async def chat_endpoint(
                     c.execute("""
                         INSERT INTO chat_messages (id, chat_id, user_id, role, content, model, close_burned)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", response, model_used, settings.BURN_PER_MESSAGE))
+                    """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", response, model_used, effective_burn))
                     try:
-                        tx_hash = burn_close(settings.BURN_PER_MESSAGE)
+                        tx_hash = burn_close(effective_burn)
                         c.execute("""
                             UPDATE close_transactions SET status = 'completed', tx_hash = %s
                             WHERE id = %s
                         """, (tx_hash, burn_tx_id))
                     except Exception as e:
                         logger.error(f"On-chain burn failed: {e}")
-                        c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (settings.BURN_PER_MESSAGE, user_id))
+                        c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
                         c.execute("""
                             UPDATE close_transactions SET status = 'failed', tx_hash = 'burn_error'
                             WHERE id = %s
                         """, (burn_tx_id,))
                 else:
-                    c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (settings.BURN_PER_MESSAGE, user_id))
+                    c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
                     c.execute("""
                         UPDATE close_transactions SET status = 'failed'
                         WHERE id = %s
@@ -156,7 +158,7 @@ async def chat_endpoint(
             "chat_id": chat_id,
             "model": model_used,
             "close_balance": new_balance,
-            "close_burned": settings.BURN_PER_MESSAGE if ai_success else 0,
+            "close_burned": effective_burn if ai_success else 0,
             "memory_used": bool(memory_context),
             "success": ai_success
         }
@@ -215,6 +217,8 @@ async def chat_stream(
             )
 
         user_id = user["id"]
+        wallet_address = user.get("wallet_address")
+        effective_burn = get_effective_burn_amount(wallet_address, settings.BURN_PER_MESSAGE)
         burn_tx_id = str(uuid.uuid4())
 
         # Atomic balance check + deduct
@@ -222,7 +226,7 @@ async def chat_stream(
             with conn.cursor() as c:
                 c.execute(
                     "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
-                    (settings.BURN_PER_MESSAGE, user_id, settings.BURN_PER_MESSAGE)
+                    (effective_burn, user_id, effective_burn)
                 )
                 if c.rowcount == 0:
                     return JSONResponse(
@@ -236,7 +240,7 @@ async def chat_stream(
                 c.execute("""
                     INSERT INTO close_transactions (id, user_id, type, amount, status)
                     VALUES (%s, %s, %s, %s, %s)
-                """, (burn_tx_id, user_id, "burn", settings.BURN_PER_MESSAGE, "pending"))
+                """, (burn_tx_id, user_id, "burn", effective_burn, "pending"))
                 c.execute("""
                     INSERT INTO chats (id, user_id, title) VALUES (%s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET updated = NOW()
@@ -291,22 +295,22 @@ async def chat_stream(
                             c.execute("""
                                 INSERT INTO chat_messages (id, chat_id, user_id, role, content, model, close_burned)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", full_response, model_used, settings.BURN_PER_MESSAGE))
+                            """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", full_response, model_used, effective_burn))
                             try:
-                                tx_hash = burn_close(settings.BURN_PER_MESSAGE)
+                                tx_hash = burn_close(effective_burn)
                                 c.execute("""
                                     UPDATE close_transactions SET status = 'completed', tx_hash = %s
                                     WHERE id = %s
                                 """, (tx_hash, burn_tx_id))
                             except Exception as e:
                                 logger.error(f"On-chain burn failed: {e}")
-                                c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (settings.BURN_PER_MESSAGE, user_id))
+                                c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
                                 c.execute("""
                                     UPDATE close_transactions SET status = 'failed', tx_hash = 'burn_error'
                                     WHERE id = %s
                                 """, (burn_tx_id,))
                         else:
-                            c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (settings.BURN_PER_MESSAGE, user_id))
+                            c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
                             c.execute("""
                                 UPDATE close_transactions SET status = 'failed'
                                 WHERE id = %s
