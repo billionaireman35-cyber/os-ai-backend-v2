@@ -1,5 +1,5 @@
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Body
 from app.models.schemas import ChatRequest
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -381,3 +381,27 @@ async def get_chat_messages(chat_id: str, user=Depends(get_current_user)):
                 }
                 for row in rows
             ]
+
+@router.post("/messages/{message_id}/report")
+async def report_message(message_id: str, body: dict = Body(...), user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    reason = body.get("reason")
+    details = body.get("details", "")
+    if not reason:
+        raise HTTPException(400, "A reason is required")
+
+    report_id = str(uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT id FROM chat_messages WHERE id = %s", (message_id,))
+            if not c.fetchone():
+                raise HTTPException(404, "Message not found")
+            c.execute("""
+                INSERT INTO message_reports (id, message_id, user_id, reason, details)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (report_id, message_id, user["id"], reason, details))
+            conn.commit()
+
+    return {"success": True, "report_id": report_id}

@@ -115,6 +115,17 @@ def init_db():
                         deleted_at TIMESTAMP
                     )
                 """)
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS message_reports (
+                        id TEXT PRIMARY KEY,
+                        message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        reason TEXT NOT NULL,
+                        details TEXT,
+                        status TEXT DEFAULT 'open',
+                        created TIMESTAMP DEFAULT NOW()
+                    )
+                """)
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS memories (
