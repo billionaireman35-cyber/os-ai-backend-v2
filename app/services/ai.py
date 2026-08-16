@@ -86,7 +86,7 @@ def build_system_prompt(user_query: str, user: dict, memory_context: str = "", w
 - Current time: {time_context}
 - User: {user_model}
 - Retrieved memory: {memory_context if memory_context else "No relevant past conversations."}
-- Web search results: {web_results if web_results else "No web results available."}
+- Web search results: {web_results if web_results else "No web results were retrieved for this query. If the answer could depend on information that may have changed after your training cutoff (current office-holders, prices, scores, recent events, anything time-sensitive), you MUST say so explicitly and flag that your knowledge may be outdated - do NOT state a specific current fact (e.g. who currently holds an office) as if verified when it was not."}
 -----
 USER QUERY: {user_query}
 """

@@ -101,7 +101,12 @@ async def chat_endpoint(
             logger.error(f"Memory retrieval failed: {e}")
 
         web_results = ""
-        if any(kw in user_msg.lower() for kw in ["latest", "today", "news", "current", "recent"]):
+        if any(kw in user_msg.lower() for kw in [
+            "latest", "today", "news", "current", "recent", "now", "who is",
+            "who's", "president", "prime minister", "ceo", "governor", "election",
+            "price of", "exchange rate", "stock price", "score", "won", "winner",
+            "this year", "this week", "right now", "still", "update", "happened"
+        ]):
             try:
                 web_results = search_web(user_msg)
             except Exception as e:
@@ -259,7 +264,12 @@ async def chat_stream(
             logger.error(f"Memory retrieval failed: {e}")
 
         web_results = ""
-        if any(kw in user_msg.lower() for kw in ["latest", "today", "news", "current", "recent"]):
+        if any(kw in user_msg.lower() for kw in [
+            "latest", "today", "news", "current", "recent", "now", "who is",
+            "who's", "president", "prime minister", "ceo", "governor", "election",
+            "price of", "exchange rate", "stock price", "score", "won", "winner",
+            "this year", "this week", "right now", "still", "update", "happened"
+        ]):
             try:
                 web_results = search_web(user_msg)
             except Exception as e:

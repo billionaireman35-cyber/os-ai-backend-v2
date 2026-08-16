@@ -12,3 +12,19 @@ INFO:     Finished server process [7615]
 INFO:     Started server process [27742]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'app/api/v1/chat.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [27742]
+INFO:     Started server process [31385]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'app/services/ai.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [31385]
+INFO:     Started server process [31602]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
