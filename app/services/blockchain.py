@@ -53,7 +53,7 @@ def get_web3(chain: str):
 def send_raw_tx(web3, private_key, tx):
     signed = web3.eth.account.sign_transaction(tx, private_key)
     tx_hash = web3.eth.send_raw_transaction(signed.rawTransaction)
-    return web3.to_hex(tx_hash)
+    return web3.toHex(tx_hash)
 
 # Simple lock for nonce management (thread-safe per wallet)
 _wallet_locks = {}
@@ -65,7 +65,7 @@ def get_wallet_lock(address):
 def broadcast_signed_transaction(web3, signed_tx):
     """Broadcast a signed transaction and return the tx hash."""
     tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-    return web3.to_hex(tx_hash)
+    return web3.toHex(tx_hash)
 
 DEAD_ADDRESS = to_checksum_address("0x000000000000000000000000000000000000dEaD")
 

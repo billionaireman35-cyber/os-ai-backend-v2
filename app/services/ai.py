@@ -102,20 +102,80 @@ def get_user_model(user) -> str:
     return f"User: {user.get('name')}, CLOSE Balance: {user.get('close_balance', 0)}, Tier: {user.get('stake_tier', 'none')}"
 
 def search_web(query: str) -> str:
-    if not settings.SERPAPI_KEY:
-        return ""
-    try:
-        resp = requests.get(
-            "https://serpapi.com/search",
-            params={"engine": "google", "q": query, "num": 3, "api_key": settings.SERPAPI_KEY},
-            timeout=10
-        )
-        if resp.status_code == 200:
-            results = resp.json().get("organic_results", [])
-            snippets = [r.get("snippet", "") for r in results[:3]]
-            return "\n".join([f"- {s}" for s in snippets if s])
-    except Exception as e:
-        logger.error(f"Web search error: {e}")
+    """Try Tavily, then Exa, then SerpAPI. Logs clearly at each stage
+    (missing key / request error / empty results) so failures are never
+    silent - a prior version of this function returned "" with zero
+    logging whenever SERPAPI_KEY was unset, which was hard to diagnose."""
+
+    if settings.TAVILY_API_KEY:
+        try:
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={"api_key": settings.TAVILY_API_KEY, "query": query, "max_results": 3},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                snippets = [r.get("content", "") for r in results[:3]]
+                snippets = [s for s in snippets if s]
+                if snippets:
+                    return "\n".join([f"- {s}" for s in snippets])
+                logger.warning("Tavily returned 200 but no usable results")
+            else:
+                logger.error(f"Tavily search error {resp.status_code}: {resp.text[:300]}")
+        except Exception as e:
+            logger.error(f"Tavily search exception: {e}")
+    else:
+        logger.info("Tavily skipped: TAVILY_API_KEY not set")
+
+    if settings.EXA_API_KEY:
+        try:
+            resp = requests.post(
+                "https://api.exa.ai/search",
+                headers={"x-api-key": settings.EXA_API_KEY, "Content-Type": "application/json"},
+                json={"query": query, "numResults": 3, "contents": {"text": {"maxCharacters": 500}}},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                snippets = [r.get("text", "") for r in results[:3]]
+                snippets = [s for s in snippets if s]
+                if snippets:
+                    return "\n".join([f"- {s}" for s in snippets])
+                logger.warning("Exa returned 200 but no usable results")
+            else:
+                logger.error(f"Exa search error {resp.status_code}: {resp.text[:300]}")
+        except Exception as e:
+            logger.error(f"Exa search exception: {e}")
+    else:
+        logger.info("Exa skipped: EXA_API_KEY not set")
+
+    if settings.SERPAPI_KEY:
+        try:
+            resp = requests.get(
+                "https://serpapi.com/search",
+                params={"engine": "google", "q": query, "num": 3, "api_key": settings.SERPAPI_KEY},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if "error" in data:
+                    logger.error(f"SerpAPI returned error in 200 response: {data['error']}")
+                else:
+                    results = data.get("organic_results", [])
+                    snippets = [r.get("snippet", "") for r in results[:3]]
+                    snippets = [s for s in snippets if s]
+                    if snippets:
+                        return "\n".join([f"- {s}" for s in snippets])
+                    logger.warning("SerpAPI returned 200 but no usable results")
+            else:
+                logger.error(f"SerpAPI search error {resp.status_code}: {resp.text[:300]}")
+        except Exception as e:
+            logger.error(f"SerpAPI search exception: {e}")
+    else:
+        logger.info("SerpAPI skipped: SERPAPI_KEY not set")
+
+    logger.error(f"All web search providers failed or unconfigured for query: {query[:100]}")
     return ""
 
 # ------------------------------------------------------------------------------
@@ -270,6 +330,8 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 CLOUDFLARE_MODEL = "@cf/meta/llama-3-8b-instruct"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MISTRAL_MODEL = "mistral-small-latest"
+MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
 # ------------------------------------------------------------------------------
 # CORE AI CALL (NON‑STREAMING)
@@ -333,6 +395,31 @@ def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: 
                     return content, "Llama 3.3 70B (Groq)"
         except Exception as e:
             logger.error(f"Groq error: {e}")
+
+    if settings.MISTRAL_API_KEY:
+        try:
+            resp = requests.post(
+                MISTRAL_URL,
+                headers={
+                    "Authorization": f"Bearer {settings.MISTRAL_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": MISTRAL_MODEL,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 2500,
+                },
+                timeout=35
+            )
+            if resp.status_code == 200:
+                content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                if content:
+                    if user_id:
+                        store_memory(user_id, content, messages[-1]["content"])
+                    return content, "Mistral Small (Mistral)"
+        except Exception as e:
+            logger.error(f"Mistral error: {e}")
 
     if settings.CLOUDFLARE_ACCOUNT_ID and settings.CLOUDFLARE_API_KEY:
         try:
@@ -487,6 +574,58 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
                         model_store[:] = ["Llama 3.3 70B (Groq, partial)"]
+                    return
+
+    if not any_content_yielded and settings.MISTRAL_API_KEY:
+        async with httpx.AsyncClient(timeout=60) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    MISTRAL_URL,
+                    headers={
+                        "Authorization": f"Bearer {settings.MISTRAL_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": MISTRAL_MODEL,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 2500,
+                        "stream": True,
+                    }
+                ) as response:
+                    if response.status_code != 200:
+                        logger.error(f"Mistral stream error {response.status_code}: {await response.aread()}")
+                        raise Exception("Mistral stream failed")
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                if content:
+                                    full_content.append(content)
+                                    any_content_yielded = True
+                                    yield content
+                            except json.JSONDecodeError:
+                                pass
+                if full_content:
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    if model_store is not None:
+                        model_store[:] = ["Mistral Small (Mistral)"]
+                    return
+            except Exception as e:
+                logger.error(f"Mistral streaming error: {e}")
+                if any_content_yielded:
+                    complete_response = "".join(full_content)
+                    if user_id:
+                        store_memory(user_id, complete_response, messages[-1]["content"])
+                    if model_store is not None:
+                        model_store[:] = ["Mistral Small (Mistral, partial)"]
                     return
 
     if not any_content_yielded:

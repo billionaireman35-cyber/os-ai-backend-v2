@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     CLOSE_CONTRACT_ADDRESS: str
     CLOSE_STAKING_CONTRACT_ADDRESS: str = ""
+    MISTRAL_API_KEY: str = ""
+    TAVILY_API_KEY: str = ""
+    EXA_API_KEY: str = ""
     DISTRIBUTION_WALLET_ADDRESS: str
     DISTRIBUTION_WALLET_PRIVATE_KEY: str
 
