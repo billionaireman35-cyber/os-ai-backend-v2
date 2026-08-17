@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     MISTRAL_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
     EXA_API_KEY: str = ""
+    DEPOSIT_ADDRESS: str = "0x52b6e0aeD9511A4bCD0c5D454ccBe0EcF4308B7F"
+    DEPOSIT_MIN_USD_POLYGON: float = 4.0
+    DEPOSIT_MIN_USD_BSC: float = 4.0
+    DEPOSIT_MIN_USD_ETHEREUM: float = 15.0
+    CLOSE_PER_USD: float = 100.0
     DISTRIBUTION_WALLET_ADDRESS: str
     DISTRIBUTION_WALLET_PRIVATE_KEY: str
 

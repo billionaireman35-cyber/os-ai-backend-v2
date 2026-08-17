@@ -8,6 +8,7 @@ from app.services.wallet_service import (
     get_user_private_key
 )
 from app.services.blockchain import burn_close
+from app.services.deposit_service import verify_and_credit_deposit
 from app.core.database import get_db
 import uuid
 import logging
@@ -117,6 +118,35 @@ async def burn(
                 )
                 conn.commit()
         raise HTTPException(500, "Burn failed on-chain - your balance has been refunded")
+
+@router.post("/deposit/verify")
+async def verify_deposit(
+    chain: str = Body(..., embed=True),
+    tx_hash: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    try:
+        result = verify_and_credit_deposit(user["id"], chain, tx_hash)
+        return {"success": True, **result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Deposit verification failed: {e}")
+        raise HTTPException(500, "Failed to verify deposit")
+
+@router.get("/deposit/info")
+async def deposit_info():
+    return {
+        "address": settings.DEPOSIT_ADDRESS,
+        "minimums": {
+            "polygon": settings.DEPOSIT_MIN_USD_POLYGON,
+            "bsc": settings.DEPOSIT_MIN_USD_BSC,
+            "ethereum": settings.DEPOSIT_MIN_USD_ETHEREUM,
+        },
+        "close_per_usd": settings.CLOSE_PER_USD
+    }
 
 @router.post("/send")
 async def send(
