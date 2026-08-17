@@ -116,6 +116,20 @@ def init_db():
                     )
                 """)
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS withdrawal_requests (
+                        id TEXT PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        chain TEXT NOT NULL,
+                        token_symbol TEXT NOT NULL,
+                        amount NUMERIC NOT NULL,
+                        destination_address TEXT NOT NULL,
+                        status TEXT DEFAULT 'pending',
+                        tx_hash TEXT,
+                        created TIMESTAMP DEFAULT NOW(),
+                        fulfilled_at TIMESTAMP
+                    )
+                """)
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS crypto_deposits (
                         id TEXT PRIMARY KEY,
                         user_id UUID REFERENCES users(id) ON DELETE CASCADE,

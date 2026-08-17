@@ -224,3 +224,120 @@ Traceback (most recent call last):
   File "/data/data/com.termux/files/home/OS-AI-Backend/app/api/v1/__init__.py", line 2, in <module>
     from app.api.v1 import moonpay
 ImportError: cannot import name 'moonpay' from partially initialized module 'app.api.v1' (most likely due to a circular import) (/data/data/com.termux/files/home/OS-AI-Backend/app/api/v1/__init__.py)
+WARNING:  StatReload detected changes in 'app/api/v1/__init__.py'. Reloading...
+INFO:     Started server process [25000]
+INFO:     Waiting for application startup.
+WARNING:  StatReload detected changes in 'app/api/v1/router.py'. Reloading...
+INFO:     Application startup complete.
+INFO:     Started server process [25099]
+INFO:     Waiting for application startup.
+❌ Database init error: network error
+ERROR:    Traceback (most recent call last):
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 154, in _read
+    block = sock.read(size - got)
+  File "/data/data/com.termux/files/usr/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/ssl.py", line 1304, in recv_into
+    return self.read(nbytes, buffer)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/ssl.py", line 1138, in read
+    return self._sslobj.read(len, buffer)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+ConnectionAbortedError: [Errno 103] Software caused connection abort
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/core/database.py", line 31, in get_db
+    yield conn
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/core/database.py", line 88, in init_db
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_email_purpose ON verification_codes (email, purpose)")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/legacy.py", line 251, in execute
+    self._context = self._c.execute_simple(operation)
+                    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 678, in execute_simple
+    self.handle_messages(context)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 822, in handle_messages
+    code, data_len = ci_unpack(_read(self._sock, 5))
+                               ~~~~~^^^^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 160, in _read
+    raise InterfaceError("network error") from e
+pg8000.exceptions.InterfaceError: network error
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 144, in _flush
+    sock.flush()
+    ~~~~~~~~~~^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/socket.py", line 737, in write
+    return self._sock.send(b)
+           ~~~~~~~~~~~~~~~^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/ssl.py", line 1232, in send
+    return self._sslobj.write(data)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/core/database.py", line 33, in get_db
+    conn.rollback()
+    ~~~~~~~~~~~~~^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/legacy.py", line 500, in rollback
+    self.execute_unnamed("rollback")
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 687, in execute_unnamed
+    _flush(self._sock)
+    ~~~~~~^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 146, in _flush
+    raise InterfaceError("network error") from e
+pg8000.exceptions.InterfaceError: network error
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 144, in _flush
+    sock.flush()
+    ~~~~~~~~~~^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/socket.py", line 737, in write
+    return self._sock.send(b)
+           ~~~~~~~~~~~~~~~^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/ssl.py", line 1232, in send
+    return self._sslobj.write(data)
+           ~~~~~~~~~~~~~~~~~~^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/starlette/routing.py", line 671, in lifespan
+    async with self.lifespan_context(app):
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/starlette/routing.py", line 566, in __aenter__
+    await self._router.startup()
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/starlette/routing.py", line 648, in startup
+    await handler()
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/main.py", line 28, in startup
+    init_db()
+    ~~~~~~~^^
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/core/database.py", line 41, in init_db
+    with get_db() as conn:
+         ~~~~~~^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/data/data/com.termux/files/home/OS-AI-Backend/app/core/database.py", line 36, in get_db
+    conn.close()
+    ~~~~~~~~~~^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 541, in close
+    _flush(self._sock)
+    ~~~~~~^^^^^^^^^^^^
+  File "/data/data/com.termux/files/usr/lib/python3.13/site-packages/pg8000/core.py", line 146, in _flush
+    raise InterfaceError("network error") from e
+pg8000.exceptions.InterfaceError: network error
+
+ERROR:    Application startup failed. Exiting.

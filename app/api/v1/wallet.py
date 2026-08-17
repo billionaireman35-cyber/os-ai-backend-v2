@@ -9,6 +9,7 @@ from app.services.wallet_service import (
 )
 from app.services.blockchain import burn_close
 from app.services.deposit_service import verify_and_credit_deposit
+import uuid as uuid_lib
 from app.core.database import get_db
 import uuid
 import logging
@@ -147,6 +148,142 @@ async def deposit_info():
         },
         "close_per_usd": settings.CLOSE_PER_USD
     }
+
+@router.post("/withdraw/request")
+async def request_withdrawal(
+    chain: str = Body(..., embed=True),
+    token_symbol: str = Body(..., embed=True),
+    amount: float = Body(..., embed=True),
+    destination_address: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be greater than 0")
+
+    try:
+        get_user_private_key(user["id"], password)
+    except Exception:
+        raise HTTPException(400, "Incorrect password")
+
+    user_id = user["id"]
+    request_id = str(uuid_lib.uuid4())
+
+    if token_symbol.upper() == "CLOSE":
+        with get_db() as conn:
+            with conn.cursor() as c:
+                amount_int = int(amount)
+                c.execute(
+                    "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
+                    (amount_int, user_id, amount_int)
+                )
+                if c.rowcount == 0:
+                    raise HTTPException(402, "Insufficient CLOSE balance")
+                c.execute("""
+                    INSERT INTO withdrawal_requests (id, user_id, chain, token_symbol, amount, destination_address)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (request_id, user_id, chain, token_symbol, amount_int, destination_address))
+                conn.commit()
+    else:
+        # Non-CLOSE tokens: request is logged but balance isn't held in our
+        # DB (it lives on-chain in the user's own wallet), so nothing to
+        # debit here - this just creates a trackable withdrawal record.
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    INSERT INTO withdrawal_requests (id, user_id, chain, token_symbol, amount, destination_address)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (request_id, user_id, chain, token_symbol, amount, destination_address))
+                conn.commit()
+
+    return {"success": True, "request_id": request_id, "status": "pending"}
+
+
+@router.get("/transactions/history")
+async def transaction_history(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    user_id = user["id"]
+    history = []
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, type, amount, status, tx_hash, created
+                FROM close_transactions WHERE user_id = %s ORDER BY created DESC LIMIT 50
+            """, (user_id,))
+            for row in c.fetchall():
+                history.append({
+                    "kind": row[1], "amount": float(row[2]), "status": row[3],
+                    "tx_hash": row[4], "created": row[5].isoformat() if row[5] else None
+                })
+
+            c.execute("""
+                SELECT chain, token_symbol, amount, usd_value, close_credited, tx_hash, created
+                FROM crypto_deposits WHERE user_id = %s ORDER BY created DESC LIMIT 50
+            """, (user_id,))
+            for row in c.fetchall():
+                history.append({
+                    "kind": "deposit", "chain": row[0], "token_symbol": row[1],
+                    "amount": float(row[2]), "usd_value": float(row[3]),
+                    "close_credited": row[4], "tx_hash": row[5],
+                    "created": row[6].isoformat() if row[6] else None
+                })
+
+            c.execute("""
+                SELECT chain, token_symbol, amount, destination_address, status, tx_hash, created
+                FROM withdrawal_requests WHERE user_id = %s ORDER BY created DESC LIMIT 50
+            """, (user_id,))
+            for row in c.fetchall():
+                history.append({
+                    "kind": "withdrawal", "chain": row[0], "token_symbol": row[1],
+                    "amount": float(row[2]), "destination_address": row[3],
+                    "status": row[4], "tx_hash": row[5],
+                    "created": row[6].isoformat() if row[6] else None
+                })
+
+    history.sort(key=lambda x: x["created"] or "", reverse=True)
+    return {"history": history}
+
+
+@router.post("/withdraw/fulfill")
+async def fulfill_withdrawal(
+    request_id: str = Body(..., embed=True),
+    tx_hash: str = Body(..., embed=True),
+    admin_key: str = Body(..., embed=True)
+):
+    if admin_key != settings.FOUNDER_KEY:
+        raise HTTPException(403, "Invalid admin key")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE withdrawal_requests SET status = 'fulfilled', tx_hash = %s, fulfilled_at = NOW() WHERE id = %s",
+                (tx_hash, request_id)
+            )
+            if c.rowcount == 0:
+                raise HTTPException(404, "Withdrawal request not found")
+            conn.commit()
+    return {"success": True}
+
+
+@router.get("/withdraw/pending")
+async def list_pending_withdrawals(admin_key: str):
+    if admin_key != settings.FOUNDER_KEY:
+        raise HTTPException(403, "Invalid admin key")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, user_id, chain, token_symbol, amount, destination_address, created
+                FROM withdrawal_requests WHERE status = 'pending' ORDER BY created ASC
+            """)
+            rows = c.fetchall()
+    return {"pending": [
+        {"id": r[0], "user_id": str(r[1]), "chain": r[2], "token_symbol": r[3],
+         "amount": float(r[4]), "destination_address": r[5], "created": r[6].isoformat() if r[6] else None}
+        for r in rows
+    ]}
 
 @router.post("/send")
 async def send(
