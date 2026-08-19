@@ -1,21 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from app.core.security import get_current_user
 from app.core.database import get_db
+from app.services.workspace_payment_service import verify_workspace_payment
 import uuid, logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Membership model (locked 2026-08-19): one-time payment, permanent access.
-# No burn, no subscription, no expiry, no renewal. 6000 CLOSE buys permanent
-# membership; do not turn this into a recurring charge without a deliberate
-# product decision — see Hustle Hub economics notes.
+# No burn, no subscription, no expiry, no renewal. Payment is verified
+# on-chain (see workspace_payment_service.py) rather than debited from an
+# internal DB balance - CLOSE moves for real, to the platform treasury,
+# before access is granted. Do not turn this into a recurring charge or
+# revert to internal-ledger debiting without a deliberate product decision.
 WORKSPACE_CREATE_COST = 5000
 WORKSPACE_JOIN_COST = 6000
 
 
 def _is_admin(c, workspace_id: str, user_id: str) -> bool:
-    """Owner (role='admin') check, restricted to approved members only."""
     c.execute(
         "SELECT role FROM workspace_members WHERE workspace_id = %s AND user_id = %s AND status = 'approved'",
         (workspace_id, user_id)
@@ -29,37 +31,29 @@ async def create_workspace(
     name: str = Body(...),
     description: str = Body(""),
     is_public: bool = Body(False),
+    tx_hash: str = Body(..., description="Tx hash of the 5000 CLOSE payment to the treasury address"),
     user=Depends(get_current_user)
 ):
     if not user:
         raise HTTPException(401, "Authentication required")
 
     user_id = user["id"]
+
+    try:
+        verify_workspace_payment(user_id, tx_hash, WORKSPACE_CREATE_COST, "create")
+    except ValueError as e:
+        raise HTTPException(402, str(e))
+
     room_code = ''.join(uuid.uuid4().hex[:8].upper())
     workspace_id = str(uuid.uuid4())
-    tx_id = str(uuid.uuid4())
 
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute(
-                "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
-                (WORKSPACE_CREATE_COST, user_id, WORKSPACE_CREATE_COST)
-            )
-            if c.rowcount == 0:
-                raise HTTPException(402, "Insufficient CLOSE balance to create a Hustle Hub (5000 CLOSE required)")
-
-            c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, status)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (tx_id, user_id, "workspace_create", WORKSPACE_CREATE_COST, "confirmed"))
-
             c.execute("""
                 INSERT INTO workspaces (id, name, description, room_code, owner_id, is_public)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (workspace_id, name, description, room_code, user_id, is_public))
 
-            # Owner is auto-approved — they already paid the create cost above,
-            # and there's no one else to approve them.
             c.execute("""
                 INSERT INTO workspace_members (workspace_id, user_id, role, status)
                 VALUES (%s, %s, %s, %s)
@@ -82,9 +76,6 @@ async def create_workspace(
 async def list_workspaces(user=Depends(get_current_user)):
     if not user:
         raise HTTPException(401, "Authentication required")
-    # Private by design: a user only sees workspaces where they are an
-    # APPROVED member. Pending requests don't grant visibility into the
-    # hub's activity — that's the whole point of the approval gate.
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
@@ -99,15 +90,10 @@ async def list_workspaces(user=Depends(get_current_user)):
             rows = c.fetchall()
             return [
                 {
-                    "id": row[0],
-                    "name": row[1],
-                    "description": row[2],
-                    "room_code": row[3],
-                    "owner_id": row[4],
-                    "is_public": row[5],
+                    "id": row[0], "name": row[1], "description": row[2], "room_code": row[3],
+                    "owner_id": row[4], "is_public": row[5],
                     "created_at": row[6].isoformat() if row[6] else None,
-                    "member_count": row[7],
-                    "is_member": True
+                    "member_count": row[7], "is_member": True
                 }
                 for row in rows
             ]
@@ -118,11 +104,7 @@ async def join_workspace(
     room_code: str = Body(...),
     user=Depends(get_current_user)
 ):
-    """
-    Submits a join REQUEST. Free to request — no CLOSE is charged here.
-    The 6000 CLOSE join cost is charged only when an owner/admin approves
-    the request (see /{workspace_id}/requests/{user_id}/approve).
-    """
+    """Free join REQUEST - no payment yet. Payment happens at approval."""
     if not user:
         raise HTTPException(401, "Authentication required")
 
@@ -163,7 +145,6 @@ async def list_join_requests(workspace_id: str, user=Depends(get_current_user)):
         with conn.cursor() as c:
             if not _is_admin(c, workspace_id, user["id"]):
                 raise HTTPException(403, "Only the hub owner or admins can view join requests")
-
             c.execute("""
                 SELECT m.user_id, u.name, m.role
                 FROM workspace_members m
@@ -171,14 +152,23 @@ async def list_join_requests(workspace_id: str, user=Depends(get_current_user)):
                 WHERE m.workspace_id = %s AND m.status = 'pending'
             """, (workspace_id,))
             rows = c.fetchall()
-            return [
-                {"user_id": r[0], "user_name": r[1] or "Unknown", "role": r[2]}
-                for r in rows
-            ]
+            return [{"user_id": r[0], "user_name": r[1] or "Unknown", "role": r[2]} for r in rows]
 
 
 @router.post("/{workspace_id}/requests/{requester_id}/approve")
-async def approve_join_request(workspace_id: str, requester_id: str, user=Depends(get_current_user)):
+async def approve_join_request(
+    workspace_id: str,
+    requester_id: str,
+    tx_hash: str = Body(..., embed=True, description="Tx hash of the requester's 6000 CLOSE payment to the treasury address"),
+    user=Depends(get_current_user)
+):
+    """
+    Approves a pending join request. The 6000 CLOSE payment must already be
+    on-chain (paid by the REQUESTER, from their own wallet, to the treasury)
+    before this is called - the admin submits the requester's tx_hash here
+    to confirm and finalize. If payment verification fails (wrong sender,
+    wrong amount, already used), approval is blocked with a 402.
+    """
     if not user:
         raise HTTPException(401, "Authentication required")
 
@@ -199,24 +189,13 @@ async def approve_join_request(workspace_id: str, requester_id: str, user=Depend
             if row[0] != "pending":
                 raise HTTPException(400, f"Request is not pending (status: {row[0]})")
 
-            # Charge the join cost now, atomically. If the requester can't
-            # afford it, approval fails outright — no partial state.
-            c.execute(
-                "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
-                (WORKSPACE_JOIN_COST, requester_id, WORKSPACE_JOIN_COST)
-            )
-            if c.rowcount == 0:
-                raise HTTPException(402, "Requester has insufficient CLOSE balance (6000 CLOSE required) — approval blocked")
+    try:
+        verify_workspace_payment(requester_id, tx_hash, WORKSPACE_JOIN_COST, "join", workspace_id)
+    except ValueError as e:
+        raise HTTPException(402, str(e))
 
-            tx_id = str(uuid.uuid4())
-            # "workspace_membership" not "workspace_join" — this is a one-time,
-            # permanent access payment (no burn, no expiry, no renewal), not a
-            # per-join transaction fee. See product notes, 2026-08-19.
-            c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, status)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (tx_id, requester_id, "workspace_membership", WORKSPACE_JOIN_COST, "confirmed"))
-
+    with get_db() as conn:
+        with conn.cursor() as c:
             c.execute(
                 "UPDATE workspace_members SET status = 'approved' WHERE workspace_id = %s AND user_id = %s",
                 (workspace_id, requester_id)
@@ -230,14 +209,10 @@ async def approve_join_request(workspace_id: str, requester_id: str, user=Depend
 async def reject_join_request(workspace_id: str, requester_id: str, user=Depends(get_current_user)):
     if not user:
         raise HTTPException(401, "Authentication required")
-
     with get_db() as conn:
         with conn.cursor() as c:
             if not _is_admin(c, workspace_id, user["id"]):
                 raise HTTPException(403, "Only the hub owner or admins can reject join requests")
-
-            # No charge was ever made for a pending request, so nothing to
-            # refund — just remove the request.
             c.execute(
                 "DELETE FROM workspace_members WHERE workspace_id = %s AND user_id = %s AND status = 'pending'",
                 (workspace_id, requester_id)
@@ -245,7 +220,6 @@ async def reject_join_request(workspace_id: str, requester_id: str, user=Depends
             if c.rowcount == 0:
                 raise HTTPException(404, "No pending join request found for this user")
             conn.commit()
-
     return {"message": "Request rejected"}
 
 
@@ -278,11 +252,9 @@ async def get_workspace_messages(
                 c.execute("SELECT name FROM users WHERE id = %s", (row[1],))
                 user_row = c.fetchone()
                 messages.append({
-                    "id": row[0],
-                    "user_id": row[1],
+                    "id": row[0], "user_id": row[1],
                     "user_name": user_row[0] if user_row else "Unknown",
-                    "content": row[2],
-                    "is_ai": row[3],
+                    "content": row[2], "is_ai": row[3],
                     "created_at": row[4].isoformat() if row[4] else None
                 })
             return messages
