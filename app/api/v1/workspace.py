@@ -291,7 +291,7 @@ async def get_workspace_messages(
 @router.post("/{workspace_id}/message")
 async def send_workspace_message(
     workspace_id: str,
-    content: str = Body(...),
+    content: str = Body(..., embed=True),
     user=Depends(get_current_user)
 ):
     if not user:
