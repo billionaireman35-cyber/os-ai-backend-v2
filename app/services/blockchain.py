@@ -3,6 +3,9 @@ from web3 import Web3
 from eth_utils import to_checksum_address
 from app.core.config import settings
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ERC-20 ABI (includes burn, transfer, balanceOf, decimals)
 ERC20_ABI = [
@@ -48,7 +51,10 @@ def get_web3(chain: str):
         "arbitrum": "https://arb1.arbitrum.io/rpc",
         "base": "https://mainnet.base.org/",
     }
-    return Web3(Web3.HTTPProvider(rpc_map.get(chain, settings.POLYGON_RPC_URL)))
+    return Web3(Web3.HTTPProvider(
+        rpc_map.get(chain, settings.POLYGON_RPC_URL),
+        request_kwargs={'timeout': 15}
+    ))
 
 def send_raw_tx(web3, private_key, tx):
     signed = web3.eth.account.sign_transaction(tx, private_key)
@@ -118,7 +124,7 @@ def get_balance(chain: str, address: str):
     address = to_checksum_address(address)
     web3 = get_web3(chain)
     balance = web3.eth.get_balance(address)
-    return web3.from_wei(balance, 'ether')
+    return web3.fromWei(balance, 'ether')
 
 def get_token_balance(chain: str, token_address: str, wallet_address: str) -> float:
     """Get ERC-20 token balance for a given chain and wallet."""
@@ -148,7 +154,8 @@ def get_all_balances(address: str) -> dict:
     for chain in settings.SUPPORTED_CHAINS:
         try:
             native_bal = float(get_balance(chain, address))
-        except Exception:
+        except Exception as e:
+            logger.error(f"get_balance failed for {chain}/{address}: {e}")
             native_bal = 0.0
 
         result[chain] = {
