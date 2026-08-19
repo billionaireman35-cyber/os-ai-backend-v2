@@ -6,6 +6,10 @@ import uuid, logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Membership model (locked 2026-08-19): one-time payment, permanent access.
+# No burn, no subscription, no expiry, no renewal. 6000 CLOSE buys permanent
+# membership; do not turn this into a recurring charge without a deliberate
+# product decision — see Hustle Hub economics notes.
 WORKSPACE_CREATE_COST = 5000
 WORKSPACE_JOIN_COST = 6000
 
@@ -205,10 +209,13 @@ async def approve_join_request(workspace_id: str, requester_id: str, user=Depend
                 raise HTTPException(402, "Requester has insufficient CLOSE balance (6000 CLOSE required) — approval blocked")
 
             tx_id = str(uuid.uuid4())
+            # "workspace_membership" not "workspace_join" — this is a one-time,
+            # permanent access payment (no burn, no expiry, no renewal), not a
+            # per-join transaction fee. See product notes, 2026-08-19.
             c.execute("""
                 INSERT INTO close_transactions (id, user_id, type, amount, status)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (tx_id, requester_id, "workspace_join", WORKSPACE_JOIN_COST, "confirmed"))
+            """, (tx_id, requester_id, "workspace_membership", WORKSPACE_JOIN_COST, "confirmed"))
 
             c.execute(
                 "UPDATE workspace_members SET status = 'approved' WHERE workspace_id = %s AND user_id = %s",
