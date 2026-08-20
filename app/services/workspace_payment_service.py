@@ -25,6 +25,37 @@ TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 CHAIN = "polygon"
 
 
+def get_unresolved_payment(user_id: str, tx_hash: str, purpose: str):
+    """
+    Checks whether this tx_hash was already verified for this user/purpose
+    but never got linked to a completed workspace (workspace_id IS NULL).
+    Used to let a failed create_workspace be safely retried with the same
+    tx_hash, instead of verify_workspace_payment rejecting it as a
+    duplicate. Returns the payment row id if an unresolved payment exists,
+    else None.
+    """
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id FROM workspace_payments
+                WHERE user_id = %s AND tx_hash = %s AND purpose = %s AND workspace_id IS NULL
+            """, (user_id, tx_hash, purpose))
+            row = c.fetchone()
+            return row[0] if row else None
+
+
+def link_payment_to_workspace(payment_id: str, workspace_id: str):
+    """Marks a previously-verified payment as resolved by linking it to the
+    workspace it paid for. Called once workspace creation actually succeeds."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE workspace_payments SET workspace_id = %s WHERE id = %s",
+                (workspace_id, payment_id)
+            )
+            conn.commit()
+
+
 def verify_workspace_payment(user_id: str, tx_hash: str, expected_amount: int, purpose: str, workspace_id: str = None) -> dict:
     """
     Verifies a CLOSE token payment to the treasury address for Hustle Hub

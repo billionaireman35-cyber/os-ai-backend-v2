@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from app.core.security import get_current_user
 from app.core.database import get_db
-from app.services.workspace_payment_service import verify_workspace_payment
+from app.services.workspace_payment_service import verify_workspace_payment, get_unresolved_payment, link_payment_to_workspace
 import uuid, logging
 
 router = APIRouter()
@@ -39,10 +39,17 @@ async def create_workspace(
 
     user_id = user["id"]
 
-    try:
-        verify_workspace_payment(user_id, tx_hash, WORKSPACE_CREATE_COST, "create")
-    except ValueError as e:
-        raise HTTPException(402, str(e))
+    # If this exact tx_hash was already verified for a previous, failed
+    # create_workspace attempt (payment succeeded, creation itself didn't),
+    # skip re-verification - it would wrongly reject as "already used".
+    # Resume with the existing verified payment instead of re-charging.
+    payment_id = get_unresolved_payment(user_id, tx_hash, "create")
+    if not payment_id:
+        try:
+            result = verify_workspace_payment(user_id, tx_hash, WORKSPACE_CREATE_COST, "create")
+            payment_id = result["id"]
+        except ValueError as e:
+            raise HTTPException(402, str(e))
 
     room_code = ''.join(uuid.uuid4().hex[:8].upper())
     workspace_id = str(uuid.uuid4())
@@ -60,6 +67,10 @@ async def create_workspace(
             """, (workspace_id, user_id, "admin", "approved"))
 
             conn.commit()
+
+    # Payment is now resolved - link it so a future retry with this same
+    # tx_hash won't be treated as unresolved again.
+    link_payment_to_workspace(payment_id, workspace_id)
 
     return {
         "id": workspace_id,
