@@ -156,6 +156,16 @@ def init_db():
                     )
                 """)
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS chat_topups (
+                        id TEXT PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        tx_hash TEXT UNIQUE NOT NULL,
+                        amount BIGINT NOT NULL,
+                        status TEXT DEFAULT 'confirmed',
+                        created TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS message_reports (
                         id TEXT PRIMARY KEY,
                         message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,

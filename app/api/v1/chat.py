@@ -340,6 +340,29 @@ async def chat_stream(
 # ------------------------------------------------------------------------------
 # Chat history endpoints (unchanged)
 # ------------------------------------------------------------------------------
+@router.post("/topup")
+async def topup_chat_balance(
+    tx_hash: str = Body(..., embed=True, description="Tx hash of a CLOSE payment to the chat treasury address"),
+    user=Depends(get_current_user)
+):
+    """
+    Credits close_balance (the internal chat-message allowance) based on a
+    verified real CLOSE payment to the chat treasury. 1:1 credit - send 1000
+    CLOSE, get 1000 close_balance to spend on messages. See
+    chat_topup_service.py for the on-chain verification.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    from app.services.chat_topup_service import verify_and_credit_chat_topup
+    try:
+        result = verify_and_credit_chat_topup(user["id"], tx_hash)
+    except ValueError as e:
+        raise HTTPException(402, str(e))
+
+    return result
+
+
 @router.get("/chats")
 async def get_chats(user=Depends(get_current_user)):
     if not user:
