@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, founder
+from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, founder, founder_suite
 from app.api.v1 import developer, wc, workspace, notifications, leaderboard
 
 router = APIRouter()
@@ -16,5 +16,6 @@ router.include_router(admin.router, prefix="/admin", tags=["Admin"])
 router.include_router(developer.router)
 router.include_router(wc.router)
 router.include_router(founder.router, prefix="/founder", tags=["Founder"])
+router.include_router(founder_suite.router, prefix="/founder-suite", tags=["Founder Suite"])
 
 api_router = router
