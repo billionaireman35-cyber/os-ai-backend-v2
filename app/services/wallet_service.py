@@ -276,6 +276,52 @@ def send_transaction(
             conn.commit()
     return tx_hash
 
+def sign_and_broadcast_swap(
+    user_id: str,
+    password: str,
+    chain: str,
+    to_address: str,
+    data: str,
+    value_wei: int = 0,
+) -> str:
+    """
+    Signs and broadcasts arbitrary contract calldata (e.g. a KyberSwap
+    router swap) using the user's own decrypted private key - same
+    non-custodial pattern as send_transaction, but for a contract call
+    rather than a simple transfer. to_address is the router contract,
+    data is the encoded swap calldata from POST /swap (route/build).
+    """
+    private_key_hex = get_user_private_key(user_id, password)
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            row = c.fetchone()
+            if not row or not row[0]:
+                raise ValueError("No wallet address found")
+            from_address = row[0]
+
+    from app.services.transaction import sign_transaction, broadcast_transaction
+    signed_hex = sign_transaction(
+        chain=chain,
+        from_address=from_address,
+        to_address=to_address,
+        value_wei=value_wei,
+        private_key_hex=private_key_hex,
+        data=data,
+    )
+    tx_hash = broadcast_transaction(chain, signed_hex)
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (str(uuid.uuid4()), user_id, "swap", 0, tx_hash, chain, "completed"))
+            conn.commit()
+    return tx_hash
+
+
 def decrypt_private_key(encrypted_key: str, password: str) -> str:
     """Decrypt a private key using the same scheme as _encrypt_private_key."""
     from Crypto.Cipher import AES

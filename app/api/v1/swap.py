@@ -112,3 +112,41 @@ async def get_swap_calldata(
     except Exception as e:
         logger.error(f"KyberSwap build exception: {e}")
         raise HTTPException(500, "Internal server error")
+
+
+@router.post("/execute")
+async def execute_swap(
+    chain: str = Body(...),
+    to: str = Body(..., description="Router contract address, from /swap response"),
+    data: str = Body(..., description="Encoded swap calldata, from /swap response"),
+    value: str = Body("0", description="Transaction value in wei, from /swap response"),
+    password: str = Body(...),
+    user=Depends(get_current_user)
+):
+    """
+    Signs and broadcasts the swap using the user's own wallet - the final
+    step after /quote and /swap have prepared the route and calldata. Same
+    non-custodial pattern as /wallet/send: password decrypts the user's own
+    key locally in this request, never stored, never sent anywhere else.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    if len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+
+    from app.services.wallet_service import sign_and_broadcast_swap
+    try:
+        tx_hash = sign_and_broadcast_swap(
+            user_id=user["id"],
+            password=password,
+            chain=chain,
+            to_address=to,
+            data=data,
+            value_wei=int(value),
+        )
+        return {"tx_hash": tx_hash}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Swap execution failed: {e}")
+        raise HTTPException(500, f"Swap execution failed: {str(e)}")
