@@ -10,7 +10,7 @@ from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
-from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution
+from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution, get_web3, ERC20_ABI
 from app.services.coingecko_service import get_token_price
 
 logger = logging.getLogger(__name__)
@@ -247,12 +247,32 @@ def send_transaction(
     )
     tx_hash = broadcast_transaction(chain, signed_hex)
 
+    # Convert amount_wei to a human-readable token amount before storing -
+    # close_transactions.amount is BIGINT and everywhere else in this table
+    # stores plain amounts (e.g. 5000, 6000, 200), not 18-decimal wei, which
+    # both overflows BIGINT for any real amount and would make this row
+    # inconsistent with every other row in the table. Use the token's own
+    # decimals() when sending an ERC-20 (CLOSE, USDC, etc. differ - USDC is
+    # 6, not 18), falling back to 18 (native chain currency, or if the
+    # decimals() call itself fails) matching the existing pattern used for
+    # balance display elsewhere in this file.
+    if token_address:
+        try:
+            web3 = get_web3(chain)
+            contract = web3.eth.contract(address=to_checksum_address(token_address), abi=ERC20_ABI)
+            decimals = contract.functions.decimals().call()
+        except Exception:
+            decimals = 18
+    else:
+        decimals = 18
+    human_amount = int(amount_wei / (10 ** decimals))
+
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
                 INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (str(uuid.uuid4()), user_id, "send", amount_wei, tx_hash, chain, "completed"))
+            """, (str(uuid.uuid4()), user_id, "send", human_amount, tx_hash, chain, "completed"))
             conn.commit()
     return tx_hash
 
