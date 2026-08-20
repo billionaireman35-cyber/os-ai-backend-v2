@@ -1,58 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
-from app.core.security import get_current_user, create_token
+from app.core.security import get_current_user
 from app.core.config import settings
+from app.core.database import get_db
 import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 @router.post("/")
 async def founder_login(
-    code: dict = Body(...),
+    code: str = Body(..., embed=True),
     user=Depends(get_current_user)
 ):
-    # If user is already authenticated, just return them
-    if user:
-        return {"message": "Already authenticated", "user": user}
-    # Otherwise, validate founder key
-    if code.get("code") == settings.FOUNDER_KEY:
-        # In practice, we might want to create a special founder session
-        # For now, we'll return a token for the founder user if they exist,
-        # or we can create a temporary founder session.
-        # But since we don't have a founder user ID here, we need to fetch or create one.
-        # We'll use the founder@closeai.io user.
-        from app.core.database import get_db
-        from app.core.security import hash_password, now_utc
-        import uuid
-        from datetime import timedelta
+    """
+    Elevates the CURRENTLY LOGGED-IN user to founder status, if the correct
+    founder key is provided. Requires an existing valid session - this is
+    not a separate login, it's a privilege upgrade for the account you're
+    already authenticated as.
+    """
+    if not user:
+        raise HTTPException(401, "You must be logged in to your account before entering the founder key")
 
-        email = "founder@closeai.io"
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("SELECT id FROM users WHERE email = %s", (email,))
-                row = c.fetchone()
-                if not row:
-                    # Create founder user if not exists
-                    user_id = str(uuid.uuid4())
-                    hashed = hash_password("Founder@123")  # default password
-                    c.execute("""
-                        INSERT INTO users (id, email, password_hash, name, is_founder)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (user_id, email, hashed, "Founder", True))
-                    conn.commit()
-                    user_id = user_id
-                else:
-                    user_id = row[0]
-                token = create_token(user_id)
-                # Store session
-                c.execute("""
-                    INSERT INTO user_sessions (user_id, token, expires_at)
-                    VALUES (%s, %s, %s)
-                """, (user_id, token, now_utc() + timedelta(days=30)))
-                conn.commit()
-        return {"token": token, "user": {"id": user_id, "email": email, "is_founder": True}}
-    else:
+    if code != settings.FOUNDER_KEY:
         raise HTTPException(401, "Invalid founder key")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("UPDATE users SET is_founder = TRUE WHERE id = %s", (user["id"],))
+            conn.commit()
+
+    logger.info(f"User {user['id']} elevated to founder status")
+    return {"message": "Founder status granted", "user": {**user, "is_founder": True}}
+
 
 @router.post("/add-close")
 async def add_close(
