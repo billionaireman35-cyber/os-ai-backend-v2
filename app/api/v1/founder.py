@@ -34,6 +34,25 @@ async def founder_login(
     return {"message": "Founder status granted", "user": {**user, "is_founder": True}}
 
 
+@router.get("/_debug_key_shape")
+async def _debug_key_shape():
+    """
+    TEMPORARY diagnostic - reveals only the length and first/last character
+    of settings.FOUNDER_KEY, never the full value. Remove this endpoint
+    once the founder-key mismatch investigation is resolved.
+    """
+    key = settings.FOUNDER_KEY or ""
+    if not key:
+        return {"error": "FOUNDER_KEY is empty or not set on the server"}
+    return {
+        "length": len(key),
+        "first_char": key[0],
+        "last_char": key[-1],
+        "has_leading_whitespace": key != key.lstrip(),
+        "has_trailing_whitespace": key != key.rstrip(),
+    }
+
+
 @router.post("/add-close")
 async def add_close(
     amount: int = Body(..., embed=True),
