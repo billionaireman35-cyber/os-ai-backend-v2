@@ -27,30 +27,17 @@ async def founder_login(
 
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("UPDATE users SET is_founder = TRUE WHERE id = %s", (user["id"],))
+            # Both flags updated together - is_founder gates founder-only
+            # routes/actions, stake_tier drives the tier badge shown
+            # throughout the UI (Sidebar, etc). They must stay in sync.
+            c.execute(
+                "UPDATE users SET is_founder = TRUE, stake_tier = 'founder' WHERE id = %s",
+                (user["id"],)
+            )
             conn.commit()
 
     logger.info(f"User {user['id']} elevated to founder status")
-    return {"message": "Founder status granted", "user": {**user, "is_founder": True}}
-
-
-@router.get("/_debug_key_shape")
-async def _debug_key_shape():
-    """
-    TEMPORARY diagnostic - reveals only the length and first/last character
-    of settings.FOUNDER_KEY, never the full value. Remove this endpoint
-    once the founder-key mismatch investigation is resolved.
-    """
-    key = settings.FOUNDER_KEY or ""
-    if not key:
-        return {"error": "FOUNDER_KEY is empty or not set on the server"}
-    return {
-        "length": len(key),
-        "first_char": key[0],
-        "last_char": key[-1],
-        "has_leading_whitespace": key != key.lstrip(),
-        "has_trailing_whitespace": key != key.rstrip(),
-    }
+    return {"message": "Founder status granted", "user": {**user, "is_founder": True, "stake_tier": "founder"}}
 
 
 @router.post("/add-close")
