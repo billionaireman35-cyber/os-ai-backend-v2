@@ -130,8 +130,13 @@ async def login(req: LoginRequest):
             if not user or not verify_password(req.password, user[2]):
                 raise HTTPException(401, "Invalid credentials")
             user_id, email, _, name, close_balance, close_staked, stake_tier, is_founder = user
-            if is_founder:
-                raise HTTPException(403, "Founder account must use the founder login portal")
+            # NOTE: founder accounts previously could NOT log in at all here -
+            # this raised a 403 unconditionally, with no working alternate
+            # path (the founder-key endpoint requires an existing session,
+            # which this block prevented from ever being created). Removed
+            # 2026-08-20. Founder status is a privilege layer on a normal
+            # account, not a separate auth system - normal login already
+            # returns is_founder/stake_tier correctly below.
             if req.fingerprint:
                 c.execute("UPDATE users SET device_fingerprint = %s, fingerprint_verified = TRUE WHERE id = %s", (req.fingerprint, user_id))
             # REMOVED: any UPDATE users SET close_balance = close_balance + X
