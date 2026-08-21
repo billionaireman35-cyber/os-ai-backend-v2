@@ -23,7 +23,13 @@ async def generate_treasury_wallet(
     password: str = Body(..., embed=True, description="Password to encrypt the new wallet's private key")
 ):
     if founder_key != settings.FOUNDER_KEY:
-        raise HTTPException(403, "Invalid founder key")
+        raise HTTPException(403, {
+            "error": "Invalid founder key",
+            "received_length": len(founder_key),
+            "expected_length": len(settings.FOUNDER_KEY),
+            "received_first_last": f"{founder_key[0]}...{founder_key[-1]}" if founder_key else "(empty)",
+            "expected_first_last": f"{settings.FOUNDER_KEY[0]}...{settings.FOUNDER_KEY[-1]}" if settings.FOUNDER_KEY else "(empty)",
+        })
     if len(password) < 12:
         raise HTTPException(400, "Use a password of at least 12 characters - this protects real treasury funds")
 
