@@ -158,8 +158,13 @@ def sign_transaction(
         if estimated > 0:
             gas_limit = int(estimated * 1.2)
         else:
-            # Fallback: native transfer = 21000, contract interaction = 50000
-            gas_limit = 21000 if data == "0x" else 50000
+            # Fallback when eth_estimateGas itself fails/reverts (can happen
+            # for contract calls needing prior approval, or certain RPC
+            # nodes rejecting the simulation): native transfer = 21000,
+            # contract interaction = 250000 (generous general-purpose
+            # ceiling - a DEX router swap alone needs 76770+ in practice,
+            # per the KyberSwap gas-shortfall this fixed on 2026-08-20).
+            gas_limit = 21000 if data == "0x" else 250000
 
     # Ensure minimum gas
     min_gas = 21000
