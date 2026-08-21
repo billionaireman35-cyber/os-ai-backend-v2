@@ -44,17 +44,34 @@ ERC20_ABI = [
 
 # RPC URL map (extend as needed)
 def get_web3(chain: str):
-    rpc_map = {
-        "polygon": settings.POLYGON_RPC_URL,
-        "ethereum": settings.ETHEREUM_RPC_URL,
-        "bsc": "https://bsc-dataseed.binance.org/",
-        "arbitrum": "https://arb1.arbitrum.io/rpc",
-        "base": "https://mainnet.base.org/",
-    }
-    return Web3(Web3.HTTPProvider(
-        rpc_map.get(chain, settings.POLYGON_RPC_URL),
-        request_kwargs={'timeout': 15}
-    ))
+    """
+    Returns a connected Web3 instance for the given chain, trying each
+    configured RPC URL in order (Alchemy -> Infura -> public fallback, per
+    settings.get_rpc_urls()) until one actually responds to a real request.
+    Added 2026-08-20: a free public RPC (polygon-rpc.com) returned a
+    stale/incorrect zero balance during a real send, causing a failed
+    broadcast despite the wallet genuinely having funds. Testing
+    connectivity here - not just constructing the object - catches that
+    class of failure before it reaches a real transaction.
+    """
+    urls = settings.get_rpc_urls(chain)
+    if not urls:
+        raise ValueError(f"No RPC URL configured for chain: {chain}")
+
+    last_error = None
+    for url in urls:
+        try:
+            web3 = Web3(Web3.HTTPProvider(url, request_kwargs={'timeout': 15}))
+            # Real connectivity check, not just object construction -
+            # this is what actually catches a bad/stale RPC endpoint.
+            web3.eth.block_number
+            return web3
+        except Exception as e:
+            logger.warning(f"RPC endpoint failed for {chain} ({url.split('/v')[0] if '/v' in url else url}): {e}")
+            last_error = e
+            continue
+
+    raise ConnectionError(f"All RPC endpoints failed for chain {chain}: {last_error}")
 
 def send_raw_tx(web3, private_key, tx):
     signed = web3.eth.account.sign_transaction(tx, private_key)

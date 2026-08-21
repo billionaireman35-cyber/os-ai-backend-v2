@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     ARBITRUM_RPC_URL: str = "https://arb1.arbitrum.io/rpc"
     BASE_RPC_URL: str = "https://mainnet.base.org"
     ALCHEMY_API_KEY: str = ""
+    INFURA_API_KEY: str = ""
 
     OPENROUTER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
@@ -68,6 +69,10 @@ class Settings(BaseSettings):
     CLOUDFLARE_API_KEY: str = ""
 
     def get_rpc_url(self, chain: str) -> str:
+        """Primary RPC URL for a chain - prefers Alchemy if configured,
+        falls back to the plain public endpoint otherwise. See
+        get_rpc_urls() for the full primary+fallback list used by
+        get_web3(), which is what actually matters for reliability."""
         if chain == "bsc":
             return self.BSC_RPC_URL
         if not self.ALCHEMY_API_KEY:
@@ -79,6 +84,41 @@ class Settings(BaseSettings):
             "base": "base-mainnet",
         }
         return f"https://{alchemy_chain_map.get(chain, 'eth-mainnet')}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}"
+
+    def get_rpc_urls(self, chain: str) -> list:
+        """
+        Ordered list of RPC URLs to try for this chain: Alchemy first (if
+        configured), then Infura (if configured), then the plain public
+        endpoint as a last resort. get_web3() tries each in order and uses
+        the first one that actually responds - added 2026-08-20 after a
+        free public RPC (polygon-rpc.com) returned a stale/incorrect zero
+        balance during a real transaction.
+        """
+        urls = []
+
+        alchemy_chain_map = {
+            "ethereum": "eth-mainnet",
+            "polygon": "polygon-mainnet",
+            "arbitrum": "arb-mainnet",
+            "base": "base-mainnet",
+        }
+        if self.ALCHEMY_API_KEY and chain in alchemy_chain_map:
+            urls.append(f"https://{alchemy_chain_map[chain]}.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}")
+
+        infura_chain_map = {
+            "ethereum": "mainnet",
+            "polygon": "polygon-mainnet",
+            "arbitrum": "arbitrum-mainnet",
+            "base": "base-mainnet",
+        }
+        if self.INFURA_API_KEY and chain in infura_chain_map:
+            urls.append(f"https://{infura_chain_map[chain]}.infura.io/v3/{self.INFURA_API_KEY}")
+
+        fallback = getattr(self, f"{chain.upper()}_RPC_URL", None) if chain != "bsc" else self.BSC_RPC_URL
+        if fallback:
+            urls.append(fallback)
+
+        return urls
 
 settings = Settings()
 
