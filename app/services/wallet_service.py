@@ -11,7 +11,7 @@ from ecdsa import SigningKey, SECP256k1
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution, get_web3, ERC20_ABI
-from app.services.coingecko_service import get_token_price
+from app.services.coingecko_service import get_token_price, get_market_data_for_ids
 
 logger = logging.getLogger(__name__)
 
@@ -100,29 +100,54 @@ def get_user_balance(user_id: str) -> dict:
             address = row[0]
             internal_close_balance = row[1] or 0
 
-            # 🔥 Fetch on‑chain balances (native + tokens)
+            # Fetch on-chain balances (native + tokens)
             raw_balances = get_all_balances(address)
             enriched = {}
             total_usd = 0
 
+            cg_id_map = {
+                "polygon": "matic-network",
+                "ethereum": "ethereum",
+                "bsc": "binancecoin",
+                "arbitrum": "arbitrum",
+                "base": "ethereum",
+            }
+            token_cg_map = {
+                "CLOSE": "close-token",
+                "OSINA": "osina",
+                "USDC": "usd-coin",
+                "WETH": "ethereum",
+                "DAI": "dai",
+            }
+
+            # Collect every CoinGecko id this wallet actually needs, then
+            # fetch price + 24h change + 7d sparkline in ONE batched call
+            # (was previously one get_token_price() call per native/token
+            # entry - N sequential requests). See get_market_data_for_ids
+            # in coingecko_service.py, added 2026-08-20 for Vault sparklines.
+            needed_ids = set()
+            for chain, data in raw_balances.items():
+                needed_ids.add(cg_id_map.get(chain, "ethereum"))
+                for token_symbol in data.get("tokens", {}):
+                    if token_symbol in token_cg_map:
+                        needed_ids.add(token_cg_map[token_symbol])
+            needed_ids.add("close-token")
+
+            market_data = get_market_data_for_ids(list(needed_ids))
+
+            def _market_fields(cg_id):
+                m = market_data.get(cg_id, {})
+                return {
+                    "price": m.get("current_price", 0) or 0,
+                    "change_24h": m.get("price_change_percentage_24h"),
+                    "sparkline_7d": (m.get("sparkline_in_7d") or {}).get("price"),
+                }
+
             for chain, data in raw_balances.items():
                 native_symbol = data.get("native", {}).get("symbol", chain.upper())
                 native_balance = data.get("native", {}).get("balance", 0)
-                price = 0
-                try:
-                    cg_id_map = {
-                        "polygon": "matic-network",
-                        "ethereum": "ethereum",
-                        "bsc": "binancecoin",
-                        "arbitrum": "arbitrum",
-                        "base": "ethereum",
-                    }
-                    cg_id = cg_id_map.get(chain, "ethereum")
-                    price_data = get_token_price(cg_id, "usd")
-                    price = price_data.get(cg_id, {}).get("usd", 0)
-                except:
-                    pass
-                usd_value = native_balance * price
+                native_market = _market_fields(cg_id_map.get(chain, "ethereum"))
+                usd_value = native_balance * native_market["price"]
                 total_usd += usd_value
 
                 enriched[chain] = {
@@ -130,42 +155,29 @@ def get_user_balance(user_id: str) -> dict:
                         "symbol": native_symbol,
                         "balance": native_balance,
                         "usd": usd_value,
+                        "change_24h": native_market["change_24h"],
+                        "sparkline_7d": native_market["sparkline_7d"],
                     },
                     "tokens": {}
                 }
 
                 for token_symbol, token_data in data.get("tokens", {}).items():
-                    token_price = 0
-                    token_cg_map = {
-                        "CLOSE": "close-token",
-                        "OSINA": "osina",
-                        "USDC": "usd-coin",
-                        "WETH": "ethereum",
-                        "DAI": "dai",
-                    }
-                    if token_symbol in token_cg_map:
-                        try:
-                            price_data = get_token_price(token_cg_map[token_symbol], "usd")
-                            token_price = price_data.get(token_cg_map[token_symbol], {}).get("usd", 0)
-                        except:
-                            pass
-                    usd_token = token_data.get("balance", 0) * token_price
+                    token_market = _market_fields(token_cg_map.get(token_symbol)) if token_symbol in token_cg_map else {"price": 0, "change_24h": None, "sparkline_7d": None}
+                    usd_token = token_data.get("balance", 0) * token_market["price"]
                     total_usd += usd_token
                     enriched[chain]["tokens"][token_symbol] = {
                         "address": token_data.get("address", ""),
                         "balance": token_data.get("balance", 0),
                         "usd": usd_token,
+                        "change_24h": token_market["change_24h"],
+                        "sparkline_7d": token_market["sparkline_7d"],
                     }
 
-            # ✅ Include internal CLOSE balance as a separate field
-            # Get CLOSE price (same as above)
-            close_price = 0
-            try:
-                price_data = get_token_price("close-token", "usd")
-                close_price = price_data.get("close-token", {}).get("usd", 0)
-            except:
-                pass
-            close_usd = internal_close_balance * close_price
+            # Internal CLOSE balance (legacy ledger field, kept for backward
+            # compatibility - Vault UI now sources real CLOSE from the
+            # on-chain token entry above, not this field)
+            close_market = _market_fields("close-token")
+            close_usd = internal_close_balance * close_market["price"]
             total_usd += close_usd
 
             enriched["close"] = {

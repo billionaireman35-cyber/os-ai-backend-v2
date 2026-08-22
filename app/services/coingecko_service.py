@@ -62,6 +62,38 @@ def get_token_price(token_id: str, currency: str = "usd"):
         return {}
 
 
+def get_market_data_for_ids(coin_ids: list, currency: str = "usd"):
+    """
+    Batch-fetch current price, 24h change, and 7-day sparkline for a
+    specific list of CoinGecko IDs - up to 250 in one request, works on
+    the free tier. Used to enrich Vault asset rows with the same trend
+    data Pulse already shows, for exactly the tokens a user actually
+    holds (which won't all be in the global top-N by market cap the way
+    get_top_tokens() returns - CLOSE in particular is not a top coin).
+    Returns {} on failure so callers can render without sparklines rather
+    than break.
+    """
+    if not coin_ids:
+        return {}
+    try:
+        url = f"{COINGECKO_API}/coins/markets"
+        params = _cg_params({
+            "vs_currency": currency,
+            "ids": ",".join(coin_ids),
+            "sparkline": "true",
+            "price_change_percentage": "24h",
+        })
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code != 200:
+            logger.error(f"Coingecko market data error: {resp.status_code} - {resp.text}")
+            return {}
+        # Re-key by coin id for easy lookup by the caller
+        return {coin["id"]: coin for coin in resp.json()}
+    except Exception as e:
+        logger.error(f"Coingecko market data fetch error: {e}")
+        return {}
+
+
 def get_token_detail(token_id: str):
     """Fetch full detail for a single CoinGecko-listed token (description,
     links, market data, ATH/ATL, etc.) - used when a user taps a token in
