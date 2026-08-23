@@ -306,6 +306,59 @@ MODEL_MAP = {
     "llama-3.1-8b": "meta-llama/llama-3.1-8b-instruct",
 }
 
+# Models known to accept OpenAI-style multimodal content blocks
+# (image_url) via OpenRouter. Conservative on purpose - an unlisted model
+# receiving an image would either error or silently ignore it, so we only
+# route image messages to models confirmed to support vision.
+VISION_MODELS = {
+    "claude-opus-5", "claude-opus-5-fast", "claude-sonnet-5", "claude-fable-5",
+    "claude-opus-4.8", "claude-opus-4.8-fast", "claude-opus-4.7", "claude-opus-4.7-fast",
+    "claude-opus-4.6", "claude-sonnet-4.6", "claude-opus-4.5", "claude-haiku-4.5",
+    "claude-sonnet-4.5", "claude-opus-4.1", "claude-opus-4", "claude-sonnet-4",
+    "gpt-5.6-luna-pro", "gpt-5.6-luna", "gpt-5.6-terra-pro", "gpt-5.6-terra",
+    "gpt-5.6-sol-pro", "gpt-5.6-sol", "gpt-5.5-pro", "gpt-5.5",
+    "gpt-5.4-pro", "gpt-5.4", "gpt-5.3-chat", "gpt-5.2-chat", "gpt-5.2-pro",
+    "gpt-5.2", "gpt-5.1", "gpt-5.1-chat", "gpt-5-pro", "gpt-5-chat", "gpt-5",
+    "gpt-chat-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini",
+    "o3", "o3-pro", "o4-mini", "o4-mini-high",
+    "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash-lite",
+    "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+    "mistral-large-2512", "mistral-medium-3.5", "mistral-medium-3.1",
+    "llama-4-maverick", "llama-4-scout",
+}
+
+
+def extract_text(content) -> str:
+    """A chat message's content is normally a plain string, but a
+    multimodal message's content is a list of OpenAI-style content blocks
+    ([{"type": "text", "text": "..."}, {"type": "image_url", ...}]).
+    Every place that treats message content as plain text (moderation,
+    transaction-intent parsing, keyword-triggered web search, memory
+    storage) should go through this helper instead of assuming a string,
+    so multimodal messages don't crash or get silently mishandled."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return " ".join(p for p in parts if p)
+    return ""
+
+
+def build_vision_content(text: str, images: list) -> list:
+    """Build an OpenAI-style multimodal content block list from a text
+    string and a list of base64 data-URI image strings. Used to construct
+    the current user message's content when images are attached."""
+    blocks = [{"type": "text", "text": text}]
+    for img in images or []:
+        blocks.append({"type": "image_url", "image_url": {"url": img}})
+    return blocks
+
+
 DEFAULT_MODELS = {
     "founder": "claude-opus-5",
     "enterprise": "gpt-5.5-pro",

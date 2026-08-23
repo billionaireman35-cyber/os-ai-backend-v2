@@ -3,7 +3,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks,
 from app.models.schemas import ChatRequest
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.services.ai import call_ai_model, moderate_content, build_system_prompt, search_web, call_ai_model_stream
+from app.services.ai import (
+    call_ai_model, moderate_content, build_system_prompt, search_web,
+    call_ai_model_stream, extract_text, build_vision_content, VISION_MODELS,
+    DEFAULT_MODELS, TIER_MODEL_ACCESS,
+)
 from app.services.memory import get_memories, store_memory
 from app.services.transaction_parser import parse_transaction_intent
 from app.tasks.burn_worker import process_burn_task
@@ -29,10 +33,20 @@ async def chat_endpoint(
         user_msg = None
         for m in reversed(req.messages):
             if m.get("role") == "user":
-                user_msg = m.get("content", "")
+                user_msg = extract_text(m.get("content", ""))
                 break
         if not user_msg:
             raise HTTPException(400, "No message content")
+
+        if req.images:
+            tier_for_vision = (user or {}).get("stake_tier", "guest")
+            allowed = TIER_MODEL_ACCESS.get(tier_for_vision, TIER_MODEL_ACCESS["guest"])
+            vision_model = model if model in allowed and model in VISION_MODELS else next(
+                (m2 for m2 in allowed if m2 in VISION_MODELS), None
+            )
+            if not vision_model:
+                raise HTTPException(400, "Image messages require a vision-capable model, and none is available on your current tier.")
+            model = vision_model
 
         # Transaction intent
         tx_intent = parse_transaction_intent(user_msg)
@@ -115,11 +129,21 @@ async def chat_endpoint(
         system_prompt = build_system_prompt(user_msg, user, memory_context, web_results)
         messages_for_ai = [{"role": "system", "content": system_prompt}] + req.messages
 
+        # If images were attached, replace the last (current) user message's
+        # content with a multimodal block list, so the model actually sees
+        # the image(s). Only the current turn carries images - prior turns
+        # in req.messages keep whatever content they already had.
+        if req.images:
+            for m in reversed(messages_for_ai):
+                if m.get("role") == "user":
+                    m["content"] = build_vision_content(user_msg, req.images)
+                    break
+
         ai_success = False
         response = ""
         model_used = "fallback"
         try:
-            response, model_used = call_ai_model(messages_for_ai, user_id)
+            response, model_used = call_ai_model(messages_for_ai, user_id, model, tier=(user or {}).get("stake_tier", "guest"))
             ai_success = True
         except Exception as e:
             logger.error(f"AI call failed: {e}\n{traceback.format_exc()}")
@@ -189,10 +213,21 @@ async def chat_stream(
         user_msg = None
         for m in reversed(req.messages):
             if m.get("role") == "user":
-                user_msg = m.get("content", "")
+                user_msg = extract_text(m.get("content", ""))
                 break
         if not user_msg:
             raise HTTPException(400, "No message content")
+
+        stream_model = req.model or None
+        if req.images:
+            tier_for_vision = (user or {}).get("stake_tier", "guest")
+            allowed = TIER_MODEL_ACCESS.get(tier_for_vision, TIER_MODEL_ACCESS["guest"])
+            vision_model = stream_model if stream_model in allowed and stream_model in VISION_MODELS else next(
+                (m2 for m2 in allowed if m2 in VISION_MODELS), None
+            )
+            if not vision_model:
+                raise HTTPException(400, "Image messages require a vision-capable model, and none is available on your current tier.")
+            stream_model = vision_model
 
         tx_intent = parse_transaction_intent(user_msg)
         if tx_intent:
@@ -279,8 +314,18 @@ async def chat_stream(
         messages_for_ai = [{"role": "system", "content": system_prompt}] + req.messages
 
         tier = user.get("stake_tier", "guest")
-        model = req.model or None
+        model = stream_model
         model_store = []
+
+        # If images were attached, replace the last (current) user message's
+        # content with a multimodal block list, so the model actually sees
+        # the image(s). Only the current turn carries images - prior turns
+        # in req.messages keep whatever content they already had.
+        if req.images:
+            for m in reversed(messages_for_ai):
+                if m.get("role") == "user":
+                    m["content"] = build_vision_content(user_msg, req.images)
+                    break
 
         async def generate():
             accumulated = []

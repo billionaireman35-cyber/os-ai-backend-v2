@@ -26,6 +26,10 @@ class ChatRequest(BaseModel):
     messages: List[dict]
     chat_id: Optional[str] = None
     model: Optional[str] = None  # new
+    # Base64 data-URI images (e.g. "data:image/jpeg;base64,...") attached to
+    # the current user message. Only forwarded to vision-capable models -
+    # see VISION_MODELS in ai.py. None/empty means a plain text message.
+    images: Optional[List[str]] = None
 
 class SendRequest(BaseModel):
     to: str
