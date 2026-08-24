@@ -150,3 +150,60 @@ async def execute_swap(
     except Exception as e:
         logger.error(f"Swap execution failed: {e}")
         raise HTTPException(500, f"Swap execution failed: {str(e)}")
+
+
+@router.post("/send-sponsored")
+async def send_sponsored(
+    to_address: str = Body(...),
+    amount: float = Body(...),
+    password: str = Body(...),
+    user=Depends(get_current_user)
+):
+    """
+    Sends CLOSE with the relayer paying gas, for wallets that don't hold
+    POL. First call for a given wallet also runs a one-time bootstrap
+    (relayer drips a little POL, wallet approves the relayer to move
+    CLOSE) - transparent to the caller, just adds a bit of latency on the
+    first sponsored send only. Capped at a few sends per wallet per day;
+    see gas_sponsor.DAILY_SPONSORED_TX_CAP.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    if len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be greater than 0")
+    if not to_address:
+        raise HTTPException(400, "to_address is required")
+
+    from app.services.wallet_service import get_user_private_key
+    from app.services import gas_sponsor
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
+                row = c.fetchone()
+                if not row or not row[0]:
+                    raise HTTPException(400, "No wallet address found")
+                user_address = row[0]
+
+        private_key = get_user_private_key(user["id"], password)
+
+        gas_sponsor.ensure_bootstrapped(user["id"], user_address, private_key)
+        result = gas_sponsor.sponsored_close_send(
+            user_id=user["id"],
+            user_address=user_address,
+            to_address=to_address,
+            amount=amount,
+        )
+        return result
+    except gas_sponsor.SponsorshipError as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sponsored send failed: {e}")
+        raise HTTPException(500, f"Sponsored send failed: {str(e)}")
