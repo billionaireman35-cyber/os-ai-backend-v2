@@ -244,3 +244,97 @@ def get_effective_burn_amount(user_address: str, base_amount: int) -> int:
     tier = get_discount_tier(user_address)
     discount_pct = DISCOUNT_PERCENT_BY_TIER.get(tier, 0)
     return max(1, int(base_amount * (100 - discount_pct) / 100))
+
+# Prices CLOSE directly from its on-chain liquidity pool instead of
+# CoinGecko, which has no listing for it (see wallet_service.py's
+# token_cg_map -> "close-token" resolving to nothing, causing CLOSE to
+# always show as $0.00 in the Vault UI despite other tokens pricing fine).
+# Reads the same pool data wallets like Rabby/TokenPocket already use to
+# price thin-liquidity tokens, rather than depending on an external
+# listing CLOSE may not have for a long time.
+
+CLOSE_POL_PAIR_ADDRESS = "0x643240847B313bfd4108084A2A85a16FA938b5A2"
+
+# Minimal ABI - just enough to read pool reserves and figure out which
+# side of the pool is which token. Standard on any Uniswap V2-style pair
+# (QuickSwap, SushiSwap, etc. all use this same interface).
+PAIR_ABI = [
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "getReserves",
+        "outputs": [
+            {"name": "_reserve0", "type": "uint112"},
+            {"name": "_reserve1", "type": "uint112"},
+            {"name": "_blockTimestampLast", "type": "uint32"},
+        ],
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "token0",
+        "outputs": [{"name": "", "type": "address"}],
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "token1",
+        "outputs": [{"name": "", "type": "address"}],
+        "type": "function",
+    },
+]
+
+
+def get_close_price_from_pool(pol_price_usd: float) -> float:
+    """
+    Returns CLOSE's USD price, derived from the CLOSE/POL pool's live
+    reserves ratio multiplied by POL's known USD price. Returns 0.0 on
+    any failure (bad RPC, pool drained, unexpected token ordering, etc.)
+    so callers can fall back to existing zero-price behavior rather than
+    crashing a balance fetch over a pricing hiccup.
+
+    pol_price_usd: POL's current USD price, already fetched elsewhere
+    (e.g. from the existing CoinGecko call) - passed in rather than
+    re-fetched here, so this function has one job and doesn't duplicate
+    an API call that's already being made per-request.
+    """
+    try:
+        web3 = get_web3("polygon")
+        pair_address = to_checksum_address(CLOSE_POL_PAIR_ADDRESS)
+        close_address = to_checksum_address(settings.CLOSE_CONTRACT_ADDRESS)
+
+        pair = web3.eth.contract(address=pair_address, abi=PAIR_ABI)
+
+        token0 = pair.functions.token0().call()
+        token1 = pair.functions.token1().call()
+        reserve0, reserve1, _ = pair.functions.getReserves().call()
+
+        if reserve0 == 0 or reserve1 == 0:
+            logger.warning("CLOSE/POL pool has a zero reserve - can't derive a price")
+            return 0.0
+
+        # Figure out which reserve is CLOSE and which is POL - pools don't
+        # guarantee token0/token1 ordering, so this has to be checked, not
+        # assumed. Both CLOSE and POL are 18 decimals (CLOSE per its own
+        # deployed contract; POL/MATIC is 18 decimals natively), so a
+        # straight reserve ratio is valid without extra decimal scaling.
+        if to_checksum_address(token0) == close_address:
+            close_reserve, pol_reserve = reserve0, reserve1
+        elif to_checksum_address(token1) == close_address:
+            close_reserve, pol_reserve = reserve1, reserve0
+        else:
+            logger.error(
+                f"Neither token0 ({token0}) nor token1 ({token1}) in pool "
+                f"{pair_address} matches configured CLOSE address {close_address}"
+            )
+            return 0.0
+
+        close_price_in_pol = pol_reserve / close_reserve
+        close_price_in_usd = close_price_in_pol * pol_price_usd
+        return close_price_in_usd
+
+    except Exception as e:
+        logger.error(f"Failed to derive CLOSE price from pool: {e}")
+        return 0.0

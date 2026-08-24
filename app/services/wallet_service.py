@@ -147,6 +147,8 @@ def get_user_balance(user_id: str) -> dict:
                 native_symbol = data.get("native", {}).get("symbol", chain.upper())
                 native_balance = data.get("native", {}).get("balance", 0)
                 native_market = _market_fields(cg_id_map.get(chain, "ethereum"))
+                if chain == "polygon":
+                    pol_price_usd = native_market["price"]
                 usd_value = native_balance * native_market["price"]
                 total_usd += usd_value
 
@@ -162,7 +164,14 @@ def get_user_balance(user_id: str) -> dict:
                 }
 
                 for token_symbol, token_data in data.get("tokens", {}).items():
-                    token_market = _market_fields(token_cg_map.get(token_symbol)) if token_symbol in token_cg_map else {"price": 0, "change_24h": None, "sparkline_7d": None}
+                    if token_symbol == "CLOSE" and chain == "polygon":
+                        from app.services.blockchain import get_close_price_from_pool
+                        close_price = get_close_price_from_pool(pol_price_usd)
+                        token_market = {"price": close_price, "change_24h": None, "sparkline_7d": None}
+                    elif token_symbol in token_cg_map:
+                        token_market = _market_fields(token_cg_map[token_symbol])
+                    else:
+                        token_market = {"price": 0, "change_24h": None, "sparkline_7d": None}
                     usd_token = token_data.get("balance", 0) * token_market["price"]
                     total_usd += usd_token
                     enriched[chain]["tokens"][token_symbol] = {
@@ -176,7 +185,8 @@ def get_user_balance(user_id: str) -> dict:
             # Internal CLOSE balance (legacy ledger field, kept for backward
             # compatibility - Vault UI now sources real CLOSE from the
             # on-chain token entry above, not this field)
-            close_market = _market_fields("close-token")
+            from app.services.blockchain import get_close_price_from_pool
+            close_market = {"price": get_close_price_from_pool(pol_price_usd), "change_24h": None, "sparkline_7d": None}
             close_usd = internal_close_balance * close_market["price"]
             total_usd += close_usd
 
