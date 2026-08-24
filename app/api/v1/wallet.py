@@ -60,6 +60,31 @@ async def create_wallet(
         logger.error(f"Wallet creation failed: {e}")
         raise HTTPException(500, "Failed to create wallet")
 
+@router.post("/export-private-key")
+async def export_private_key(
+    password: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    """
+    Reveals the user's own private key in raw hex, after re-verifying their
+    wallet password. This wallet is non-custodial - the user should always
+    be able to export their own key (e.g. to import into MetaMask, or as a
+    backup independent of this app). Added 2026-08-20: this capability was
+    missing entirely - the key existed encrypted in the DB and could be
+    used internally to sign transactions, but was never exposable to its
+    own owner.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    try:
+        private_key_hex = get_user_private_key(user["id"], password)
+    except Exception:
+        raise HTTPException(400, "Incorrect password")
+
+    logger.info(f"User {user['id']} exported their private key")
+    return {"private_key": private_key_hex}
+
+
 @router.post("/burn")
 async def burn(
     amount: int = Body(..., embed=True),
