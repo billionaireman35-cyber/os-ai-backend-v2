@@ -171,3 +171,77 @@ async def list_all_transactions(
 
     history.sort(key=lambda x: x["created"] or "", reverse=True)
     return {"total": len(history), "transactions": history[offset:offset + limit]}
+
+
+@router.get("/staking-treasury")
+async def staking_treasury_overview(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    user=Depends(get_current_user)
+):
+    """
+    Founder solvency check for the staking system: how much CLOSE actually
+    sits in the treasury wallet on-chain, vs. how much the treasury owes
+    (total staked principal + total accrued-but-unclaimed yield across
+    every active position). If the on-chain balance is less than what's
+    owed, the treasury cannot currently cover a full claim/unstake wave -
+    that's surfaced explicitly as `solvent: false` rather than left for
+    the founder to calculate by eye.
+    """
+    _require_founder(user)
+
+    from app.services.blockchain import get_token_balance
+    from app.services.staking_service import (
+        STAKING_TREASURY_ADDRESS, CLOSE_TOKEN_ADDRESS, CHAIN, _calculate_yield
+    )
+
+    try:
+        treasury_balance = get_token_balance(CHAIN, CLOSE_TOKEN_ADDRESS, STAKING_TREASURY_ADDRESS)
+    except Exception as e:
+        logger.error(f"Failed to fetch staking treasury on-chain balance: {e}")
+        treasury_balance = None
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT sp.id, sp.user_id, u.email, sp.amount, sp.term, sp.apy,
+                       sp.staked_at, sp.unlock_at, sp.status, sp.unstaked_at, sp.yield_claimed
+                FROM stake_positions sp
+                LEFT JOIN users u ON u.id = sp.user_id
+                WHERE sp.status = \'active\'
+                ORDER BY sp.staked_at DESC
+            """)
+            rows = c.fetchall()
+
+    total_staked = 0
+    total_pending_yield = 0.0
+    positions = []
+    for r in rows:
+        (pos_id, uid, email, amount, term, apy, staked_at, unlock_at,
+         status, unstaked_at, yield_claimed) = r
+        pending = _calculate_yield(
+            (pos_id, amount, term, apy, staked_at, unlock_at, status, unstaked_at, yield_claimed)
+        )
+        total_staked += amount
+        total_pending_yield += pending
+        positions.append({
+            "id": pos_id, "user_id": uid, "user_email": email,
+            "amount": amount, "term": term, "apy": float(apy),
+            "staked_at": staked_at.isoformat() if staked_at else None,
+            "unlock_at": unlock_at.isoformat() if unlock_at else None,
+            "pending_yield": round(pending, 4),
+        })
+
+    total_owed = total_staked + total_pending_yield
+    solvent = treasury_balance is not None and treasury_balance >= total_owed
+
+    return {
+        "treasury_address": STAKING_TREASURY_ADDRESS,
+        "treasury_balance": treasury_balance,
+        "total_staked": total_staked,
+        "total_pending_yield": round(total_pending_yield, 4),
+        "total_owed": round(total_owed, 4),
+        "solvent": solvent,
+        "active_position_count": len(positions),
+        "positions": positions[offset:offset + limit],
+    }
