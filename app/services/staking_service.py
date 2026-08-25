@@ -23,8 +23,11 @@ CLOSE_DECIMALS = 18
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 CHAIN = "polygon"
 
-# TEMPORARY - Hustle Hub's treasury, reused for staking tests only.
-STAKING_TREASURY_ADDRESS = "0x5bD39AD3e8B1CB01e7385958160FD9b2675D02d1"
+# Dedicated staking treasury wallet, generated 2026-08-21. Address is
+# public/non-secret; the encrypted private key and password live only in
+# Render's environment (STAKING_TREASURY_ENCRYPTED_KEY, STAKING_TREASURY_PASSWORD),
+# never in source control.
+STAKING_TREASURY_ADDRESS = "0x4CfBFeD3Dd360664d6e24eC5511C87498248CC0A"
 
 TERMS = {
     "flexible": {"apy": 3, "lock_days": 0},
