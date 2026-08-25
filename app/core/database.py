@@ -166,6 +166,21 @@ def init_db():
                     )
                 """)
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS stake_positions (
+                        id TEXT PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        amount BIGINT NOT NULL,
+                        term TEXT NOT NULL,
+                        apy NUMERIC NOT NULL,
+                        staked_at TIMESTAMP DEFAULT NOW(),
+                        unlock_at TIMESTAMP,
+                        status TEXT DEFAULT 'active',
+                        unstaked_at TIMESTAMP,
+                        yield_claimed BIGINT DEFAULT 0,
+                        stake_tx_hash TEXT UNIQUE
+                    )
+                """)
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS message_reports (
                         id TEXT PRIMARY KEY,
                         message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,
