@@ -181,6 +181,18 @@ def init_db():
                     )
                 """)
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS staking_treasury_funding (
+                        id TEXT PRIMARY KEY,
+                        amount BIGINT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'chat_burn_split',
+                        chat_message_id TEXT,
+                        created TIMESTAMP DEFAULT NOW(),
+                        swept BOOLEAN DEFAULT FALSE,
+                        swept_at TIMESTAMP,
+                        sweep_tx_hash TEXT
+                    )
+                """)
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS message_reports (
                         id TEXT PRIMARY KEY,
                         message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,

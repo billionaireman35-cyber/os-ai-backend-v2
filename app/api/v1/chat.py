@@ -18,6 +18,35 @@ import uuid, logging, json, traceback
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Fraction of each chat-message burn redirected to fund staking yield
+# instead of being destroyed. 15% -> staking_treasury_funding (swept to
+# the staking treasury in a batch later), 85% -> actually burned via
+# burn_close(). See staking_treasury_funding table / founder-suite sweep
+# endpoint for the other half of this mechanism.
+STAKING_FUNDING_SPLIT = 0.15
+
+
+def burn_with_staking_split(effective_burn: int, chat_message_id: str, conn_cursor) -> str:
+    """Splits effective_burn 85/15: burns the 85% portion on-chain via
+    burn_close(), and records the 15% portion as an unswept row in
+    staking_treasury_funding (using the already-open cursor, same
+    transaction as the rest of the finalize step - if the DB commit
+    rolls back, the funding row rolls back with it). Returns the burn
+    tx_hash from the actually-burned portion; the 15% isn't sent
+    anywhere yet, just tracked for the next batch sweep."""
+    staking_portion = int(effective_burn * STAKING_FUNDING_SPLIT)
+    burn_portion = effective_burn - staking_portion
+
+    tx_hash = burn_close(burn_portion)
+
+    if staking_portion > 0:
+        conn_cursor.execute("""
+            INSERT INTO staking_treasury_funding (id, amount, source, chat_message_id)
+            VALUES (%s, %s, %s, %s)
+        """, (str(uuid.uuid4()), staking_portion, 'chat_burn_split', chat_message_id))
+
+    return tx_hash
+
 # ------------------------------------------------------------------------------
 # Non‑streaming chat endpoint
 # ------------------------------------------------------------------------------
@@ -154,12 +183,13 @@ async def chat_endpoint(
         with get_db() as conn:
             with conn.cursor() as c:
                 if ai_success:
+                    assistant_msg_id = f"msg_{uuid.uuid4().hex[:8]}"
                     c.execute("""
                         INSERT INTO chat_messages (id, chat_id, user_id, role, content, model, close_burned)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", response, model_used, effective_burn))
+                    """, (assistant_msg_id, chat_id, user_id, "assistant", response, model_used, effective_burn))
                     try:
-                        tx_hash = burn_close(effective_burn)
+                        tx_hash = burn_with_staking_split(effective_burn, assistant_msg_id, c)
                         c.execute("""
                             UPDATE close_transactions SET status = 'completed', tx_hash = %s
                             WHERE id = %s
@@ -347,12 +377,13 @@ async def chat_stream(
                 with get_db() as conn:
                     with conn.cursor() as c:
                         if ai_success and full_response:
+                            assistant_msg_id = f"msg_{uuid.uuid4().hex[:8]}"
                             c.execute("""
                                 INSERT INTO chat_messages (id, chat_id, user_id, role, content, model, close_burned)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """, (f"msg_{uuid.uuid4().hex[:8]}", chat_id, user_id, "assistant", full_response, model_used, effective_burn))
+                            """, (assistant_msg_id, chat_id, user_id, "assistant", full_response, model_used, effective_burn))
                             try:
-                                tx_hash = burn_close(effective_burn)
+                                tx_hash = burn_with_staking_split(effective_burn, assistant_msg_id, c)
                                 c.execute("""
                                     UPDATE close_transactions SET status = 'completed', tx_hash = %s
                                     WHERE id = %s
