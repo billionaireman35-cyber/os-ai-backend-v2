@@ -13,8 +13,10 @@ import logging
 import uuid
 from datetime import timedelta
 from eth_utils import to_checksum_address
-from app.services.blockchain import get_web3
+from app.services.blockchain import get_web3, send_close_from_wallet
 from app.core.database import get_db
+from app.core.config import settings
+from app.services.wallet_service import _decrypt_private_key
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,13 @@ CHAIN = "polygon"
 # Render's environment (STAKING_TREASURY_ENCRYPTED_KEY, STAKING_TREASURY_PASSWORD),
 # never in source control.
 STAKING_TREASURY_ADDRESS = "0x4CfBFeD3Dd360664d6e24eC5511C87498248CC0A"
+
+
+def _get_treasury_private_key() -> str:
+    """Decrypts the treasury's private key on demand, never cached or
+    logged. Both STAKING_TREASURY_ENCRYPTED_KEY and STAKING_TREASURY_PASSWORD
+    live only in Render's environment."""
+    return _decrypt_private_key(settings.STAKING_TREASURY_ENCRYPTED_KEY, settings.STAKING_TREASURY_PASSWORD)
 
 TERMS = {
     "flexible": {"apy": 3, "lock_days": 0},
@@ -197,27 +206,34 @@ def claim_yield(user_id: str, stake_id: str) -> dict:
             if pending_int <= 0:
                 raise ValueError("Accrued yield is less than 1 CLOSE - keep waiting")
 
-            # Yield paid from the treasury's DB-tracked balance is NOT
-            # applicable here - the treasury is a real on-chain wallet, not
-            # a user row. Paying out requires broadcasting a real
-            # send_transaction from the treasury wallet, which needs its
-            # own private key/password - not yet wired up (treasury wallet
-            # itself isn't finalized). For now this credits close_balance
-            # directly as a placeholder so the accounting/tier logic can be
-            # tested; REAL on-chain payout must replace this before going
-            # live with real users' money.
-            c.execute(
-                "UPDATE users SET close_balance = close_balance + %s WHERE id = %s",
-                (pending_int, user_id)
-            )
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            wallet_row = c.fetchone()
+            if not wallet_row or not wallet_row[0]:
+                raise ValueError("No wallet found for this account")
+            user_wallet = wallet_row[0]
+
+    # Real on-chain payout: send pending_int CLOSE from the treasury
+    # wallet to the user's own wallet. Done outside the DB transaction
+    # above (connection already closed) so a slow/failed broadcast can't
+    # hold a DB lock open.
+    treasury_key = _get_treasury_private_key()
+    tx_hash = send_close_from_wallet(
+        from_address=STAKING_TREASURY_ADDRESS,
+        from_private_key=treasury_key,
+        to_address=user_wallet,
+        amount=pending_int,
+    )
+
+    with get_db() as conn:
+        with conn.cursor() as c:
             c.execute(
                 "UPDATE stake_positions SET yield_claimed = yield_claimed + %s WHERE id = %s",
                 (pending_int, stake_id)
             )
             conn.commit()
 
-    logger.info(f"Yield claimed: user={user_id} stake={stake_id} amount={pending_int}")
-    return {"claimed": pending_int}
+    logger.info(f"Yield claimed: user={user_id} stake={stake_id} amount={pending_int} tx={tx_hash}")
+    return {"claimed": pending_int, "tx_hash": tx_hash}
 
 
 def unstake(user_id: str, stake_id: str) -> dict:
@@ -250,14 +266,27 @@ def unstake(user_id: str, stake_id: str) -> dict:
                 # arbitrage against fixed terms.
                 forfeited_yield = _calculate_yield(row)
 
-            # NOTE: principal return is currently credited to close_balance
-            # (internal ledger), same placeholder caveat as claim_yield -
-            # a real implementation returns actual on-chain CLOSE from the
-            # treasury wallet. Wire this up before real user funds are at
-            # stake here.
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            wallet_row = c.fetchone()
+            if not wallet_row or not wallet_row[0]:
+                raise ValueError("No wallet found for this account")
+            user_wallet = wallet_row[0]
+
+    # Real on-chain payout: return the principal from the treasury to the
+    # user's own wallet, same pattern as claim_yield above.
+    treasury_key = _get_treasury_private_key()
+    tx_hash = send_close_from_wallet(
+        from_address=STAKING_TREASURY_ADDRESS,
+        from_private_key=treasury_key,
+        to_address=user_wallet,
+        amount=amount,
+    )
+
+    with get_db() as conn:
+        with conn.cursor() as c:
             c.execute(
-                "UPDATE users SET close_balance = close_balance + %s, close_staked = close_staked - %s WHERE id = %s",
-                (amount, amount, user_id)
+                "UPDATE users SET close_staked = close_staked - %s WHERE id = %s",
+                (amount, user_id)
             )
             c.execute(
                 "UPDATE stake_positions SET status = 'unstaked', unstaked_at = NOW() WHERE id = %s",
@@ -267,8 +296,8 @@ def unstake(user_id: str, stake_id: str) -> dict:
 
     _recalculate_stake_tier(user_id)
 
-    logger.info(f"Unstaked: user={user_id} stake={stake_id} amount={amount} early={is_early} forfeited_yield={forfeited_yield:.2f}")
-    return {"returned": amount, "early": is_early, "forfeited_yield": round(forfeited_yield, 4)}
+    logger.info(f"Unstaked: user={user_id} stake={stake_id} amount={amount} early={is_early} forfeited_yield={forfeited_yield:.2f} tx={tx_hash}")
+    return {"returned": amount, "early": is_early, "forfeited_yield": round(forfeited_yield, 4), "tx_hash": tx_hash}
 
 
 def _recalculate_stake_tier(user_id: str):

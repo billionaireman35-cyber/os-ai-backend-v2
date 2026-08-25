@@ -338,3 +338,29 @@ def get_close_price_from_pool(pol_price_usd: float) -> float:
     except Exception as e:
         logger.error(f"Failed to derive CLOSE price from pool: {e}")
         return 0.0
+
+def send_close_from_wallet(from_address: str, from_private_key: str, to_address: str, amount: float) -> str:
+    """Send CLOSE from any wallet (given its address + raw private key hex)
+    to a recipient. Generalizes send_close_from_distribution, which is
+    hardcoded to the distribution wallet specifically - this version takes
+    the sender's key as a parameter so it can be reused for the staking
+    treasury (or any other wallet whose key we hold) without duplicating
+    the transfer logic."""
+    web3 = get_web3("polygon")
+    contract_address = to_checksum_address(settings.CLOSE_CONTRACT_ADDRESS)
+    from_address = to_checksum_address(from_address)
+    to_address = to_checksum_address(to_address)
+    contract = web3.eth.contract(address=contract_address, abi=ERC20_ABI)
+    amount_wei = int(amount * 10**18)
+    lock = get_wallet_lock(from_address)
+    with lock:
+        nonce = web3.eth.get_transaction_count(from_address, 'pending')
+        gas_estimate = contract.functions.transfer(to_address, amount_wei).estimate_gas({'from': from_address})
+        gas_limit = int(gas_estimate * 1.2)
+        tx = contract.functions.transfer(to_address, amount_wei).build_transaction({
+            'from': from_address,
+            'nonce': nonce,
+            'gas': gas_limit,
+            'gasPrice': web3.eth.gas_price
+        })
+        return send_raw_tx(web3, from_private_key, tx)
