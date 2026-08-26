@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     CLOUDFLARE_ACCOUNT_ID: str = ""
     CLOUDFLARE_API_KEY: str = ""
 
+    GOOGLE_CLIENT_ID: str = ""
+
     def get_rpc_url(self, chain: str) -> str:
         """Primary RPC URL for a chain - prefers Alchemy if configured,
         falls back to the plain public endpoint otherwise. See

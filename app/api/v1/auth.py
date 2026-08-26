@@ -6,6 +6,8 @@ from app.services.email import send_verification_email
 from app.core.config import settings
 import re, uuid, hmac, secrets, string, asyncio, logging
 from datetime import timedelta, timezone
+from google.oauth2 import id_token as google_id_token
+from google.auth.transport import requests as google_requests
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -156,6 +158,84 @@ async def login(req: LoginRequest):
                     "is_founder": is_founder
                 }
             }
+
+@router.post("/google")
+async def google_login(req: dict, request: Request):
+    """
+    Verifies a Google ID token (from Google Identity Services / One Tap
+    on the frontend) and either logs into an existing account matched by
+    google_id or email, or creates a new account. Mirrors the session
+    creation pattern in /login and /register - same user_sessions insert,
+    same response shape, so the frontend's existing login()/setUser flow
+    doesn't need to know this came from Google.
+    """
+    credential = req.get("credential")
+    if not credential:
+        raise HTTPException(400, "Missing Google credential")
+
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            credential, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+        )
+    except ValueError:
+        raise HTTPException(401, "Invalid Google credential")
+
+    google_sub = idinfo.get("sub")
+    email = idinfo.get("email")
+    email_verified = idinfo.get("email_verified", False)
+    name = idinfo.get("name") or (email.split("@")[0] if email else None)
+    picture = idinfo.get("picture")
+
+    if not google_sub or not email:
+        raise HTTPException(401, "Google credential missing required fields")
+    if not email_verified:
+        raise HTTPException(401, "Google account email is not verified")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, email, name, close_balance, close_staked, stake_tier, is_founder
+                FROM users WHERE google_id = %s
+            """, (google_sub,))
+            row = c.fetchone()
+
+            if not row:
+                c.execute("""
+                    SELECT id, email, name, close_balance, close_staked, stake_tier, is_founder
+                    FROM users WHERE email = %s
+                """, (email,))
+                row = c.fetchone()
+
+                if row:
+                    c.execute("UPDATE users SET google_id = %s WHERE id = %s", (google_sub, row[0]))
+                else:
+                    user_id = str(uuid.uuid4())
+                    c.execute("""
+                        INSERT INTO users (id, email, google_id, name, profile_picture)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (user_id, email, google_sub, name, picture))
+                    row = (user_id, email, name, 0, 0, "bronze", False)
+
+            user_id, db_email, db_name, close_balance, close_staked, stake_tier, is_founder = row
+
+            token = create_token(user_id)
+            c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
+                      (user_id, token, now_utc() + timedelta(days=30)))
+            conn.commit()
+
+            return {
+                "token": token,
+                "user": {
+                    "id": user_id,
+                    "email": db_email,
+                    "name": db_name or db_email.split("@")[0],
+                    "close_balance": close_balance or 0,
+                    "close_staked": close_staked or 0,
+                    "stake_tier": stake_tier or "bronze",
+                    "is_founder": is_founder,
+                }
+            }
+
 
 @router.post("/logout")
 async def logout(request: Request):
