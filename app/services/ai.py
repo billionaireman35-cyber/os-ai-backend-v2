@@ -361,9 +361,9 @@ def build_vision_content(text: str, images: list) -> list:
 
 DEFAULT_MODELS = {
     "founder": "claude-opus-5",
-    "enterprise": "gpt-5.5-pro",
-    "pro": "claude-sonnet-5",
-    "builder": "mistral-large-2512",
+    "platinum": "gpt-5.5-pro",
+    "gold": "claude-sonnet-5",
+    "bronze": "mistral-large-2512",
     "guest": "llama-3.3-70b",
 }
 
@@ -374,20 +374,31 @@ TIER_MODEL_ACCESS = {
         "gemini-3.1-pro-preview", "gemini-3.6-flash",
         "mistral-large-2512", "llama-4-maverick",
     ],
-    "enterprise": [
+    "platinum": [
         "gpt-5.5-pro", "gpt-5-pro", "claude-opus-4.8", "claude-sonnet-5",
         "gemini-2.5-pro", "mistral-large-2512",
     ],
-    "pro": [
+    "gold": [
         "claude-sonnet-5", "claude-haiku-4.5", "gpt-4.1", "gpt-4o",
         "gemini-2.5-flash", "mistral-medium-3.1",
     ],
-    "builder": [
+    "bronze": [
         "mistral-small-2603", "llama-3.3-70b", "gemini-2.5-flash-lite", "gpt-4.1-mini",
     ],
     "guest": [
         "llama-3.3-70b", "llama-3.1-8b", "gemini-2.5-flash-lite",
     ],
+}
+
+# Daily assistant-message caps by tier, enforced in chat.py before a
+# response is generated (and before any CLOSE is burned for it).
+# None means unlimited.
+DAILY_MESSAGE_LIMITS = {
+    "founder": None,
+    "platinum": None,
+    "gold": 1000,
+    "bronze": 100,
+    "guest": 20,
 }
 
 GROQ_MODEL = "llama-3.3-70b-versatile"

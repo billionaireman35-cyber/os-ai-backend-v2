@@ -6,7 +6,7 @@ from app.core.security import get_current_user
 from app.services.ai import (
     call_ai_model, moderate_content, build_system_prompt, search_web,
     call_ai_model_stream, extract_text, build_vision_content, VISION_MODELS,
-    DEFAULT_MODELS, TIER_MODEL_ACCESS,
+    DEFAULT_MODELS, TIER_MODEL_ACCESS, DAILY_MESSAGE_LIMITS,
 )
 from app.services.memory import get_memories, store_memory
 from app.services.transaction_parser import parse_transaction_intent
@@ -47,6 +47,38 @@ def burn_with_staking_split(effective_burn: int, chat_message_id: str, conn_curs
 
     return tx_hash
 
+
+def check_daily_message_limit(user_id, tier: str, conn_cursor) -> None:
+    """Raises HTTPException(429) if the user has hit their tier's daily
+    message cap. Counts assistant messages already recorded today (UTC)
+    in chat_messages - reuses the existing insert-per-response pattern,
+    no new table. A None limit (platinum/founder) always passes without
+    even querying, since there's nothing to enforce. A None user_id
+    (no account / anonymous request) also skips the check entirely -
+    there's no user_id to group chat_messages by, and unauthenticated
+    access is presumably already gated elsewhere (get_current_user).
+    """
+    if user_id is None:
+        return
+
+    limit = DAILY_MESSAGE_LIMITS.get(tier, DAILY_MESSAGE_LIMITS["guest"])
+    if limit is None:
+        return
+
+    conn_cursor.execute("""
+        SELECT COUNT(*) FROM chat_messages
+        WHERE user_id = %s AND role = \'assistant\'
+        AND created >= date_trunc(\'day\', NOW() AT TIME ZONE \'UTC\')
+    """, (user_id,))
+    count_today = conn_cursor.fetchone()[0]
+
+    if count_today >= limit:
+        raise HTTPException(
+            429,
+            f"Daily message limit reached ({limit}/day for your current tier). "
+            f"Stake more CLOSE to raise your limit, or wait until tomorrow (UTC)."
+        )
+
 # ------------------------------------------------------------------------------
 # Non‑streaming chat endpoint
 # ------------------------------------------------------------------------------
@@ -67,8 +99,13 @@ async def chat_endpoint(
         if not user_msg:
             raise HTTPException(400, "No message content")
 
+        tier = (user or {}).get("stake_tier", "guest")
+        with get_db() as _limit_conn:
+            with _limit_conn.cursor() as _limit_c:
+                check_daily_message_limit((user or {}).get('id'), tier, _limit_c)
+
         if req.images:
-            tier_for_vision = (user or {}).get("stake_tier", "guest")
+            tier_for_vision = tier
             allowed = TIER_MODEL_ACCESS.get(tier_for_vision, TIER_MODEL_ACCESS["guest"])
             vision_model = model if model in allowed and model in VISION_MODELS else next(
                 (m2 for m2 in allowed if m2 in VISION_MODELS), None
@@ -249,8 +286,13 @@ async def chat_stream(
             raise HTTPException(400, "No message content")
 
         stream_model = req.model or None
+        tier = (user or {}).get("stake_tier", "guest")
+        with get_db() as _limit_conn:
+            with _limit_conn.cursor() as _limit_c:
+                check_daily_message_limit((user or {}).get('id'), tier, _limit_c)
+
         if req.images:
-            tier_for_vision = (user or {}).get("stake_tier", "guest")
+            tier_for_vision = tier
             allowed = TIER_MODEL_ACCESS.get(tier_for_vision, TIER_MODEL_ACCESS["guest"])
             vision_model = stream_model if stream_model in allowed and stream_model in VISION_MODELS else next(
                 (m2 for m2 in allowed if m2 in VISION_MODELS), None

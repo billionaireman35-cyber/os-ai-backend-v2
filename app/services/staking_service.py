@@ -48,9 +48,9 @@ TERMS = {
 TIER_THRESHOLDS = [
     # (min_amount, min_lock_days, tier) - checked in order, first match wins.
     # Founder tier is granted separately via is_founder, not stake-driven.
-    (25000, 180, "enterprise"),
-    (5000, 90, "pro"),
-    (0, 0, "builder"),
+    (100000, 180, "platinum"),
+    (10000, 90, "gold"),
+    (0, 0, "bronze"),
 ]
 
 
