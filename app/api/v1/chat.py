@@ -79,6 +79,36 @@ def check_daily_message_limit(user_id, tier: str, conn_cursor) -> None:
             f"Stake more CLOSE to raise your limit, or wait until tomorrow (UTC)."
         )
 
+
+@router.get("/usage")
+async def get_usage(user=Depends(get_current_user)):
+    """Today's (UTC) assistant-message count, tier, and daily limit -
+    powers the usage bar in the chat UI. Uses the identical counting
+    query as check_daily_message_limit so the displayed number can never
+    drift from what actually gates sending - if that query ever changes,
+    change it in both places together.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    tier = (user or {}).get("stake_tier", "guest")
+    limit = DAILY_MESSAGE_LIMITS.get(tier, DAILY_MESSAGE_LIMITS["guest"])
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT COUNT(*) FROM chat_messages
+                WHERE user_id = %s AND role = \'assistant\'
+                AND created >= date_trunc(\'day\', NOW() AT TIME ZONE \'UTC\')
+            """, (user["id"],))
+            count_today = c.fetchone()[0]
+
+    return {
+        "tier": tier,
+        "used": count_today,
+        "limit": limit,
+    }
+
 # ------------------------------------------------------------------------------
 # Non‑streaming chat endpoint
 # ------------------------------------------------------------------------------
