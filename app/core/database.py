@@ -355,6 +355,19 @@ def init_db():
                 """)
 
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS generated_documents (
+                        id UUID PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        chat_id TEXT,
+                        filename TEXT NOT NULL,
+                        format TEXT NOT NULL,
+                        file_bytes BYTEA NOT NULL,
+                        created TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                c.execute("CREATE INDEX IF NOT EXISTS idx_generated_documents_user ON generated_documents (user_id)")
+
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS push_subscriptions (
                         id UUID PRIMARY KEY,
                         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
