@@ -60,6 +60,10 @@ async def create_wallet(
         logger.error(f"Wallet creation failed: {e}")
         raise HTTPException(500, "Failed to create wallet")
 
+# NOTE: create_wallet_for_user() no longer raises on an existing wallet -
+# it returns the existing address instead (see wallet_service.py). This
+# except block now only fires on genuine failures (DB/chain errors).
+
 @router.post("/export-private-key")
 async def export_private_key(
     password: str = Body(..., embed=True),
