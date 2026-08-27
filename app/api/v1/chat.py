@@ -1,4 +1,4 @@
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Body
 from app.models.schemas import ChatRequest
 from app.core.database import get_db
@@ -429,23 +429,83 @@ async def chat_stream(
                     m["content"] = build_vision_content(user_msg, req.images)
                     break
 
+        DOCUMENT_MARKER = "```generate-document"
+
         async def generate():
             accumulated = []
             ai_success = False
+            mode_decided = False
+            is_document_response = False
+            prefix_buffer = ""
+
             try:
                 async for chunk in call_ai_model_stream(messages_for_ai, user_id, model, tier, model_store):
                     accumulated.append(chunk)
-                    yield f"data: {json.dumps({'content': chunk})}\n\n"
+
+                    if not mode_decided:
+                        prefix_buffer += chunk
+                        stripped = prefix_buffer.strip()
+                        if stripped.startswith(DOCUMENT_MARKER):
+                            if len(prefix_buffer) >= len(DOCUMENT_MARKER):
+                                mode_decided = True
+                                is_document_response = True
+                                yield f"data: {json.dumps({'status': 'generating_document'})}\n\n"
+                            # else: matches so far but too short to be sure yet - keep buffering
+                        elif DOCUMENT_MARKER.startswith(stripped) and stripped:
+                            pass  # still ambiguous (short prefix could still become the marker)
+                        else:
+                            mode_decided = True
+                            is_document_response = False
+                            yield f"data: {json.dumps({'content': prefix_buffer})}\n\n"
+                    elif not is_document_response:
+                        yield f"data: {json.dumps({'content': chunk})}\n\n"
+                    # else: document mode - stay silent, just accumulate
+
                 ai_success = True
+
+                if not mode_decided:
+                    mode_decided = True
+                    is_document_response = False
+                    if prefix_buffer:
+                        yield f"data: {json.dumps({'content': prefix_buffer})}\n\n"
+
             except Exception as e:
                 logger.error(f"Streaming AI call failed: {e}\n{traceback.format_exc()}")
                 error_msg = "I'm sorry, I encountered an error. Please try again."
-                yield f"data: {json.dumps({'content': error_msg})}\n\n"
+                if not mode_decided or not is_document_response:
+                    yield f"data: {json.dumps({'content': error_msg})}\n\n"
                 accumulated.append(error_msg)
                 ai_success = False
             finally:
                 full_response = "".join(accumulated)
                 model_used = model_store[0] if model_store else "streamed"
+
+                stored_content = full_response
+                document_event = None
+
+                if is_document_response and full_response:
+                    from app.services.document_service import parse_document_block, generate_document, DocumentParseError
+                    try:
+                        parsed = parse_document_block(full_response)
+                        file_bytes = generate_document(parsed["format"], parsed["content"])
+                        doc_id = str(uuid.uuid4())
+                        with get_db() as _doc_conn:
+                            with _doc_conn.cursor() as _doc_c:
+                                _doc_c.execute("""
+                                    INSERT INTO generated_documents (id, user_id, chat_id, filename, format, file_bytes)
+                                    VALUES (%s, %s, %s, %s, %s, %s)
+                                """, (doc_id, user_id, chat_id, parsed["filename"], parsed["format"], file_bytes))
+                                _doc_conn.commit()
+                        stored_content = f"[document:{doc_id}:{parsed['filename']}.{parsed['format']}] Generated **{parsed['filename']}.{parsed['format']}**"
+                        document_event = {"document_id": doc_id, "filename": f"{parsed['filename']}.{parsed['format']}", "format": parsed["format"]}
+                    except DocumentParseError as e:
+                        logger.error(f"Document parse failed, falling back to raw text: {e}")
+                        stored_content = full_response
+                    except Exception as e:
+                        logger.error(f"Document generation failed: {e}\n{traceback.format_exc()}")
+                        stored_content = "\u26a0\ufe0f I tried to generate a document but hit an error. Please try again."
+                        document_event = {"error": True}
+
                 with get_db() as conn:
                     with conn.cursor() as c:
                         if ai_success and full_response:
@@ -453,7 +513,7 @@ async def chat_stream(
                             c.execute("""
                                 INSERT INTO chat_messages (id, chat_id, user_id, role, content, model, close_burned)
                                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """, (assistant_msg_id, chat_id, user_id, "assistant", full_response, model_used, effective_burn))
+                            """, (assistant_msg_id, chat_id, user_id, "assistant", stored_content, model_used, effective_burn))
                             try:
                                 tx_hash = burn_with_staking_split(effective_burn, assistant_msg_id, c)
                                 c.execute("""
@@ -474,6 +534,12 @@ async def chat_stream(
                                 WHERE id = %s
                             """, (burn_tx_id,))
                         conn.commit()
+
+                if document_event and not document_event.get("error"):
+                    yield f"data: {json.dumps({'document_ready': document_event})}\n\n"
+                elif document_event and document_event.get("error"):
+                    yield f"data: {json.dumps({'content': stored_content})}\n\n"
+
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
@@ -488,6 +554,32 @@ async def chat_stream(
 # ------------------------------------------------------------------------------
 # Chat history endpoints (unchanged)
 # ------------------------------------------------------------------------------
+@router.get("/documents/{document_id}")
+async def download_document(document_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT user_id, filename, format, file_bytes FROM generated_documents WHERE id = %s",
+                (document_id,)
+            )
+            row = c.fetchone()
+            if not row:
+                raise HTTPException(404, "Document not found")
+            owner_id, filename, fmt, file_bytes = row
+            if str(owner_id) != str(user["id"]):
+                raise HTTPException(403, "Access denied")
+
+    from app.services.document_service import MIME_TYPES
+    mime = MIME_TYPES.get(fmt, "application/octet-stream")
+    return Response(
+        content=bytes(file_bytes),
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="{filename}.{fmt}"'}
+    )
+
+
 @router.post("/topup")
 async def topup_chat_balance(
     tx_hash: str = Body(..., embed=True, description="Tx hash of a CLOSE payment to the chat treasury address"),
