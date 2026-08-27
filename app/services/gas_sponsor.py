@@ -81,6 +81,9 @@ def ensure_bootstrapped(user_id: str, user_address: str, user_private_key: str):
     if _is_bootstrapped(user_id):
         return
 
+    from app.services.treasury_ops import ensure_gas_funded
+    ensure_gas_funded(settings.RELAYER_WALLET_ADDRESS, settings.RELAYER_WALLET_PRIVATE_KEY, label="relayer")
+
     web3 = get_web3("polygon")
     user_address = to_checksum_address(user_address)
     relayer_address = to_checksum_address(settings.RELAYER_WALLET_ADDRESS)
@@ -125,6 +128,9 @@ def sponsored_close_send(user_id: str, user_address: str, to_address: str, amoun
     already run ensure_bootstrapped for this user."""
     if not _is_bootstrapped(user_id):
         raise SponsorshipError("Wallet not yet set up for sponsored sends.")
+
+    from app.services.treasury_ops import ensure_gas_funded
+    ensure_gas_funded(settings.RELAYER_WALLET_ADDRESS, settings.RELAYER_WALLET_PRIVATE_KEY, label="relayer")
 
     if _get_sponsored_count_today(user_id) >= DAILY_SPONSORED_TX_CAP:
         raise SponsorshipError(

@@ -90,6 +90,12 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
 
     # 🔥 Send 500 CLOSE on‑chain from distribution wallet
     try:
+        from app.services.treasury_ops import ensure_gas_funded
+        ensure_gas_funded(
+            settings.DISTRIBUTION_WALLET_ADDRESS,
+            settings.DISTRIBUTION_WALLET_PRIVATE_KEY,
+            label="distribution",
+        )
         tx_hash = send_close_from_distribution(address, settings.FREE_CLOSE_AMOUNT)
         logger.info(f"Sent {settings.FREE_CLOSE_AMOUNT} CLOSE to {address} tx: {tx_hash}")
     except Exception as e:
