@@ -177,8 +177,9 @@ async def google_login(req: dict, request: Request):
         idinfo = google_id_token.verify_oauth2_token(
             credential, google_requests.Request(), settings.GOOGLE_CLIENT_ID
         )
-    except ValueError:
-        raise HTTPException(401, "Invalid Google credential")
+    except ValueError as e:
+        logger.error(f"Google token verification failed: {e}")
+        raise HTTPException(401, f"Invalid Google credential: {e}")
 
     google_sub = idinfo.get("sub")
     email = idinfo.get("email")
