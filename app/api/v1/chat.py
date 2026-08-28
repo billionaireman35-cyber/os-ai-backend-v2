@@ -445,13 +445,15 @@ async def chat_stream(
                     if not mode_decided:
                         prefix_buffer += chunk
                         stripped = prefix_buffer.strip()
-                        if stripped.startswith(DOCUMENT_MARKER):
-                            if len(prefix_buffer) >= len(DOCUMENT_MARKER):
+                        if not stripped:
+                            pass  # only whitespace so far - still ambiguous, keep buffering
+                        elif stripped.startswith(DOCUMENT_MARKER):
+                            if len(stripped) >= len(DOCUMENT_MARKER):
                                 mode_decided = True
                                 is_document_response = True
                                 yield f"data: {json.dumps({'status': 'generating_document'})}\n\n"
                             # else: matches so far but too short to be sure yet - keep buffering
-                        elif DOCUMENT_MARKER.startswith(stripped) and stripped:
+                        elif DOCUMENT_MARKER.startswith(stripped):
                             pass  # still ambiguous (short prefix could still become the marker)
                         else:
                             mode_decided = True
