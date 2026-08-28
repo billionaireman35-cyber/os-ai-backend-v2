@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     MEMORY_RETRIEVAL_LIMIT: int = 5
 
     COINGECKO_KEY: str = ""
-    COINGECKO_KEY: str = ""
+    FX_API_KEY: str = ""
     NEWS_API_KEY: str = ""
     GNEWS_API_KEY: str = ""
     SERPAPI_KEY: str = ""

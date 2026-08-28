@@ -106,7 +106,9 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
         "encrypted_private_key": encrypted_key,
     }
 
-def get_user_balance(user_id: str) -> dict:
+def get_user_balance(user_id: str, currency: str = "USD") -> dict:
+    from app.services.fx_service import get_fx_rate
+    fx_rate = get_fx_rate(currency)
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("SELECT wallet_address, close_balance FROM users WHERE id = %s", (user_id,))
@@ -210,7 +212,26 @@ def get_user_balance(user_id: str) -> dict:
                 "balance": internal_close_balance,
                 "usd": close_usd,
             }
+
+            # Apply the fiat conversion as a final pass over everything
+            # computed above (all in USD to this point), so the currency
+            # in the response matches what the caller asked for while the
+            # underlying price math stays untouched and USD stays exact.
+            if fx_rate != 1.0:
+                for chain_data in enriched.values():
+                    if not isinstance(chain_data, dict):
+                        continue
+                    if "native" in chain_data and isinstance(chain_data["native"], dict):
+                        chain_data["native"]["usd"] = chain_data["native"].get("usd", 0) * fx_rate
+                    if "usd" in chain_data:
+                        chain_data["usd"] = chain_data["usd"] * fx_rate
+                    for token_data in chain_data.get("tokens", {}).values():
+                        if "usd" in token_data:
+                            token_data["usd"] = token_data["usd"] * fx_rate
+                total_usd = total_usd * fx_rate
+
             enriched["total_usd"] = total_usd
+            enriched["currency"] = currency.upper()
             return enriched
 
 def get_user_transactions(user_id: str, limit: int = 20) -> list:

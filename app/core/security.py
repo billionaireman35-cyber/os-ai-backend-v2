@@ -68,7 +68,8 @@ def get_current_user(request: Request):
         with conn.cursor() as c:
             c.execute("""
                 SELECT id, email, name, close_balance, close_staked, stake_tier,
-                       wallet_address, wallet_encrypted_seed, is_founder, device_fingerprint
+                       wallet_address, wallet_encrypted_seed, is_founder, device_fingerprint,
+                       preferred_currency
                 FROM users WHERE id = %s
             """, (user_id,))
             row = c.fetchone()
@@ -84,5 +85,6 @@ def get_current_user(request: Request):
                 "wallet_address": row[6] or "",
                 "encrypted_seed": row[7] or "",
                 "is_founder": row[8] or False,
-                "device_fingerprint": row[9]
+                "device_fingerprint": row[9],
+                "preferred_currency": row[10] or "USD"
             }
