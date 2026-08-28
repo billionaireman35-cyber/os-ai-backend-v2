@@ -34,6 +34,14 @@ async def get_balance(currency: str = Query(None), user=Depends(get_current_user
         raise HTTPException(500, "Failed to fetch balances")
 
 
+@router.get("/supported-currencies")
+async def supported_currencies(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    from app.services.fx_service import get_supported_fx_currencies
+    return {"currencies": ["USD"] + get_supported_fx_currencies()}
+
+
 @router.put("/preferred-currency")
 async def set_preferred_currency(
     currency: str = Body(..., embed=True),
