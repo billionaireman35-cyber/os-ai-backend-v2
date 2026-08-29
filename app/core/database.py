@@ -193,6 +193,36 @@ def init_db():
                     )
                 """)
                 c.execute("""
+                    CREATE TABLE IF NOT EXISTS governance_proposals (
+                        id TEXT PRIMARY KEY,
+                        proposer_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        voting_ends_at TIMESTAMP NOT NULL,
+                        total_staked_snapshot BIGINT NOT NULL,
+                        status TEXT DEFAULT 'active'
+                    )
+                """)
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS governance_vote_weights (
+                        proposal_id TEXT REFERENCES governance_proposals(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        staked_amount BIGINT NOT NULL,
+                        PRIMARY KEY (proposal_id, user_id)
+                    )
+                """)
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS governance_votes (
+                        proposal_id TEXT REFERENCES governance_proposals(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        support TEXT NOT NULL CHECK (support IN ('for', 'against', 'abstain')),
+                        weight BIGINT NOT NULL,
+                        voted_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (proposal_id, user_id)
+                    )
+                """)
+                c.execute("""
                     CREATE TABLE IF NOT EXISTS generated_documents (
                         id TEXT PRIMARY KEY,
                         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
