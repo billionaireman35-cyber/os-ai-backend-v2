@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from app.core.security import get_current_user
 from app.services.governance_service import (
     create_proposal, vote, get_proposal, list_proposals, get_my_voting_power,
-    MIN_STAKED_TO_PROPOSE, VOTING_PERIOD_DAYS, QUORUM_PERCENT
+    set_founder_decision, MIN_STAKED_TO_PROPOSE, VOTING_PERIOD_DAYS, QUORUM_PERCENT
 )
 import logging
 
@@ -74,5 +74,27 @@ async def cast_vote(
         raise HTTPException(401, "Authentication required")
     try:
         return vote(user["id"], proposal_id, support)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/proposals/{proposal_id}/founder-decision")
+async def founder_decision(
+    proposal_id: str,
+    decision: str = Body(...),
+    reason: str = Body(...),
+    user=Depends(get_current_user)
+):
+    """
+    Founder override/ratification of a proposal's outcome, once voting
+    has closed. decision is 'approved' or 'rejected'; the community
+    vote result is never erased - this is recorded alongside it and
+    shown publicly on the proposal, per the trust model: full override
+    power, but always visible and reasoned.
+    """
+    if not user or not user.get("is_founder"):
+        raise HTTPException(403, "Only founders can record a governance decision")
+    try:
+        return set_founder_decision(proposal_id, decision, reason)
     except ValueError as e:
         raise HTTPException(400, str(e))

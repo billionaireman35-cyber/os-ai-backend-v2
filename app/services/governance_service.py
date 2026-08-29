@@ -127,6 +127,41 @@ def vote(user_id: str, proposal_id: str, support: str) -> dict:
     return {"proposal_id": proposal_id, "support": support, "weight": weight}
 
 
+def set_founder_decision(proposal_id: str, decision: str, reason: str) -> dict:
+    """Founder override/ratification. Only callable after voting has
+    closed (can't override a still-active vote) - decision is 'approved'
+    or 'rejected', and always requires a public reason, since the
+    override is shown on the proposal for every user to see."""
+    if decision not in ("approved", "rejected"):
+        raise ValueError("decision must be 'approved' or 'rejected'")
+    if not reason.strip():
+        raise ValueError("A reason is required for a founder decision")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT voting_ends_at FROM governance_proposals WHERE id = %s
+            """, (proposal_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Proposal not found")
+            voting_ends_at = row[0]
+
+            voting_ends_at_aware = voting_ends_at.replace(tzinfo=timezone.utc) if voting_ends_at.tzinfo is None else voting_ends_at
+            if datetime.now(timezone.utc) <= voting_ends_at_aware:
+                raise ValueError("Voting is still active on this proposal - a founder decision can only be made after voting closes")
+
+            c.execute("""
+                UPDATE governance_proposals
+                SET founder_decision = %s, founder_reason = %s, founder_decided_at = NOW()
+                WHERE id = %s
+            """, (decision, reason.strip(), proposal_id))
+            conn.commit()
+
+    logger.info(f"Founder decision: proposal={proposal_id} decision={decision} reason={reason.strip()!r}")
+    return {"proposal_id": proposal_id, "founder_decision": decision, "founder_reason": reason.strip()}
+
+
 def _compute_status(voting_ends_at, total_staked_snapshot, vote_totals) -> str:
     """vote_totals is {"for": x, "against": y, "abstain": z}"""
     voting_ends_at_aware = voting_ends_at.replace(tzinfo=timezone.utc) if voting_ends_at.tzinfo is None else voting_ends_at
@@ -145,13 +180,15 @@ def get_proposal(proposal_id: str) -> dict:
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                SELECT id, proposer_id, title, description, created_at, voting_ends_at, total_staked_snapshot
+                SELECT id, proposer_id, title, description, created_at, voting_ends_at, total_staked_snapshot,
+                       founder_decision, founder_reason, founder_decided_at
                 FROM governance_proposals WHERE id = %s
             """, (proposal_id,))
             row = c.fetchone()
             if not row:
                 raise ValueError("Proposal not found")
-            pid, proposer_id, title, description, created_at, voting_ends_at, total_staked_snapshot = row
+            (pid, proposer_id, title, description, created_at, voting_ends_at, total_staked_snapshot,
+             founder_decision, founder_reason, founder_decided_at) = row
 
             c.execute("""
                 SELECT support, COALESCE(SUM(weight), 0)
@@ -179,6 +216,13 @@ def get_proposal(proposal_id: str) -> dict:
         "vote_totals": vote_totals,
         "voter_count": voter_count,
         "status": status,
+        "founder_decision": founder_decision,
+        "founder_reason": founder_reason,
+        "founder_decided_at": founder_decided_at.isoformat() if founder_decided_at else None,
+        # What actually governs the outcome: the founder's call overrides
+        # the raw community vote when present, but the community status
+        # is never hidden - both are always returned above.
+        "effective_status": founder_decision if founder_decision else status,
     }
 
 

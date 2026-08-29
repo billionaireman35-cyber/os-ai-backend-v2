@@ -430,6 +430,9 @@ def init_db():
                 c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP")
                 c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT")
                 c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_currency TEXT DEFAULT 'USD'")
+                c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decision TEXT")
+                c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_reason TEXT")
+                c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decided_at TIMESTAMP")
 
                 c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
