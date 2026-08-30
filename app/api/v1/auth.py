@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Body, Body
-from app.models.schemas import SendCodeRequest, VerifyCodeRequest, RegisterRequest, LoginRequest
+from app.models.schemas import SendCodeRequest, VerifyCodeRequest, RegisterRequest, LoginRequest, RecoverPasswordRequest
 from app.core.database import get_db
 from app.core.security import create_token, verify_password, hash_password, now_utc, get_current_user
 from app.services.email import send_verification_email
@@ -74,28 +74,13 @@ async def verify_code(req: VerifyCodeRequest):
 async def register(req: RegisterRequest):
     if len(req.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+
+    from eth_account import Account
+    Account.enable_unaudited_hdwallet_features()
+    _, recovery_phrase = Account.create_with_mnemonic()
+
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose = 'verification'", (req.email,))
-            row = c.fetchone()
-            if not row:
-                if settings.ENVIRONMENT in ("development", "staging"):
-                    if len(req.verification_code) == 6 and req.verification_code.isdigit():
-                        pass
-                    else:
-                        raise HTTPException(400, "Verification code must be 6 digits")
-                else:
-                    raise HTTPException(400, "Invalid or expired verification code")
-            else:
-                stored_code, expires_at = row
-                expires_at = ensure_aware(expires_at)
-                if expires_at < now_utc():
-                    raise HTTPException(400, "Verification code expired. Request a new one.")
-                if not hmac.compare_digest(stored_code, req.verification_code):
-                    raise HTTPException(400, "Invalid verification code")
-                c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose = 'verification'", (req.email,))
-                conn.commit()
-
             c.execute("SELECT id FROM users WHERE email = %s", (req.email,))
             if c.fetchone():
                 raise HTTPException(400, "Email already registered")
@@ -103,15 +88,18 @@ async def register(req: RegisterRequest):
             user_id = str(uuid.uuid4())
             name = req.name or req.email.split('@')[0]
             c.execute("""
-                INSERT INTO users (id, email, password_hash, name, device_fingerprint)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (user_id, req.email, hash_password(req.password), name, req.fingerprint))
+                INSERT INTO users (id, email, password_hash, name, device_fingerprint, recovery_phrase_hash)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (user_id, req.email, hash_password(req.password), name, req.fingerprint, hash_password(recovery_phrase)))
             token = create_token(user_id)
             c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
                       (user_id, token, now_utc() + timedelta(days=30)))
             conn.commit()
             return {
                 "token": token,
+                # Shown once - never retrievable again, same as a crypto
+                # wallet seed phrase. Only the hash is stored.
+                "recovery_phrase": recovery_phrase,
                 "user": {
                     "id": user_id,
                     "email": req.email,
@@ -254,58 +242,30 @@ async def get_me(user=Depends(get_current_user)):
         raise HTTPException(401, "Not authenticated")
     return user
 
-@router.post("/forgot-password")
-async def forgot_password(req: dict, background_tasks: BackgroundTasks):
-    email = req.get("email", "").strip()
-    if not email:
-        raise HTTPException(400, "Email required")
-    alphabet = string.ascii_uppercase + string.digits
-    code = ''.join(secrets.choice(alphabet) for _ in range(6))
-    with get_db() as conn:
-        with conn.cursor() as c:
-            c.execute("SELECT id FROM users WHERE email = %s", (email,))
-            if c.fetchone():
-                c.execute("""
-                    INSERT INTO verification_codes (email, code, purpose, expires_at)
-                    VALUES (%s, %s, 'password_reset', %s)
-                    ON CONFLICT (email, purpose) DO UPDATE
-                    SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at, attempts = 0
-                """, (email, code, now_utc() + timedelta(minutes=15)))
-                conn.commit()
-                background_tasks.add_task(send_verification_email, email, code, "password_reset")
-                if settings.ENVIRONMENT in ("development", "staging"):
-                    return {"message": "If the account exists, a reset code has been sent.", "code": code}
-    return {"message": "If the account exists, a reset code has been sent."}
-
-@router.post("/reset-password")
-async def reset_password(req: dict):
-    email = req.get("email", "").strip()
-    code = req.get("code", "").strip().upper()
-    new_password = req.get("new_password", "")
-    if len(new_password) < 8:
+@router.post("/recover-password")
+async def recover_password(req: RecoverPasswordRequest):
+    """
+    Password recovery via the 12-word recovery phrase shown once at
+    registration (same pattern as a crypto wallet seed phrase) - replaces
+    the old email-code reset flow, which depended on email delivery.
+    """
+    if len(req.new_password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+    email = req.email.strip()
+    phrase = req.recovery_phrase.strip().lower()
+
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT code, expires_at FROM verification_codes WHERE email = %s AND purpose='password_reset' AND expires_at > NOW()", (email,))
+            c.execute("SELECT id, recovery_phrase_hash FROM users WHERE email = %s", (email,))
             row = c.fetchone()
-            if not row:
-                if settings.ENVIRONMENT in ("development", "staging"):
-                    if len(code) == 6 and code.isdigit():
-                        pass
-                    else:
-                        raise HTTPException(400, "Invalid or expired reset code")
-                else:
-                    raise HTTPException(400, "Invalid or expired reset code")
-            else:
-                stored_code, expires_at = row
-                expires_at = ensure_aware(expires_at)
-                if expires_at < now_utc():
-                    raise HTTPException(400, "Reset code expired. Request a new one.")
-                if not hmac.compare_digest(stored_code, code):
-                    raise HTTPException(400, "Invalid reset code")
-            c.execute("UPDATE users SET password_hash = %s WHERE email = %s", (hash_password(new_password), email))
-            c.execute("DELETE FROM verification_codes WHERE email = %s AND purpose='password_reset'", (email,))
-            c.execute("DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE email = %s)", (email,))
+            if not row or not row[1]:
+                raise HTTPException(400, "Invalid email or recovery phrase")
+            user_id, stored_hash = row
+            if not verify_password(phrase, stored_hash):
+                raise HTTPException(400, "Invalid email or recovery phrase")
+
+            c.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(req.new_password), user_id))
+            c.execute("DELETE FROM user_sessions WHERE user_id = %s", (user_id,))
             conn.commit()
     return {"message": "Password reset successfully"}
 

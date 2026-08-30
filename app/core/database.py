@@ -433,6 +433,7 @@ def init_db():
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decision TEXT")
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_reason TEXT")
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decided_at TIMESTAMP")
+                c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_phrase_hash TEXT")
 
                 c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
