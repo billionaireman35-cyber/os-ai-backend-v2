@@ -451,7 +451,7 @@ def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: 
                     "temperature": 0.7,
                     "max_tokens": 4096,
                 },
-                timeout=45
+                timeout=60
             )
             if resp.status_code == 200:
                 content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -474,9 +474,9 @@ def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: 
                     "model": GROQ_MODEL,
                     "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 2500,
+                    "max_tokens": 4096,
                 },
-                timeout=35
+                timeout=60
             )
             if resp.status_code == 200:
                 content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -499,9 +499,9 @@ def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: 
                     "model": MISTRAL_MODEL,
                     "messages": messages,
                     "temperature": 0.7,
-                    "max_tokens": 2500,
+                    "max_tokens": 4096,
                 },
-                timeout=35
+                timeout=60
             )
             if resp.status_code == 200:
                 content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -580,6 +580,7 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if response.status_code != 200:
                         logger.error(f"OpenRouter stream error {response.status_code}: {await response.aread()}")
                         raise Exception("OpenRouter stream failed")
+                    was_truncated = False
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data = line[6:]
@@ -587,11 +588,14 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                                 break
                             try:
                                 chunk = json.loads(data)
-                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                choice = chunk.get("choices", [{}])[0]
+                                content = choice.get("delta", {}).get("content", "")
                                 if content:
                                     full_content.append(content)
                                     any_content_yielded = True
                                     yield content
+                                if choice.get("finish_reason") == "length":
+                                    was_truncated = True
                             except json.JSONDecodeError:
                                 pass
                 if full_content:
@@ -599,7 +603,10 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[:] = [f"{model} (OpenRouter)"]
+                        label = f"{model} (OpenRouter)"
+                        if was_truncated:
+                            label += " (truncated)"
+                        model_store[:] = [label]
                     return
             except Exception as e:
                 logger.error(f"OpenRouter streaming error: {e}")
@@ -629,13 +636,14 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                         "model": GROQ_MODEL,
                         "messages": messages,
                         "temperature": 0.7,
-                        "max_tokens": 2500,
+                        "max_tokens": 4096,
                         "stream": True,
                     }
                 ) as response:
                     if response.status_code != 200:
                         logger.error(f"Groq stream error {response.status_code}: {await response.aread()}")
                         raise Exception("Groq stream failed")
+                    was_truncated = False
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data = line[6:]
@@ -643,11 +651,14 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                                 break
                             try:
                                 chunk = json.loads(data)
-                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                choice = chunk.get("choices", [{}])[0]
+                                content = choice.get("delta", {}).get("content", "")
                                 if content:
                                     full_content.append(content)
                                     any_content_yielded = True
                                     yield content
+                                if choice.get("finish_reason") == "length":
+                                    was_truncated = True
                             except json.JSONDecodeError:
                                 pass
                 if full_content:
@@ -655,7 +666,10 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[:] = ["Llama 3.3 70B (Groq)"]
+                        label = "Llama 3.3 70B (Groq)"
+                        if was_truncated:
+                            label += " (truncated)"
+                        model_store[:] = [label]
                     return
             except Exception as e:
                 logger.error(f"Groq streaming error: {e}")
@@ -681,13 +695,14 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                         "model": MISTRAL_MODEL,
                         "messages": messages,
                         "temperature": 0.7,
-                        "max_tokens": 2500,
+                        "max_tokens": 4096,
                         "stream": True,
                     }
                 ) as response:
                     if response.status_code != 200:
                         logger.error(f"Mistral stream error {response.status_code}: {await response.aread()}")
                         raise Exception("Mistral stream failed")
+                    was_truncated = False
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data = line[6:]
@@ -695,11 +710,14 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                                 break
                             try:
                                 chunk = json.loads(data)
-                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                choice = chunk.get("choices", [{}])[0]
+                                content = choice.get("delta", {}).get("content", "")
                                 if content:
                                     full_content.append(content)
                                     any_content_yielded = True
                                     yield content
+                                if choice.get("finish_reason") == "length":
+                                    was_truncated = True
                             except json.JSONDecodeError:
                                 pass
                 if full_content:
@@ -707,7 +725,10 @@ async def call_ai_model_stream(messages: list, user_id: str = None, model: str =
                     if user_id:
                         store_memory(user_id, complete_response, messages[-1]["content"])
                     if model_store is not None:
-                        model_store[:] = ["Mistral Small (Mistral)"]
+                        label = "Mistral Small (Mistral)"
+                        if was_truncated:
+                            label += " (truncated)"
+                        model_store[:] = [label]
                     return
             except Exception as e:
                 logger.error(f"Mistral streaming error: {e}")

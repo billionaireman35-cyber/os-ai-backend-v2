@@ -542,6 +542,15 @@ async def chat_stream(
                 elif document_event and document_event.get("error"):
                     yield f"data: {json.dumps({'content': stored_content})}\n\n"
 
+                # model_used carries a "(truncated)" suffix when the
+                # provider stopped generating due to hitting max_tokens
+                # (finish_reason == "length"), set in ai.py's streaming
+                # blocks. Surface this distinctly from a normal completion
+                # so the frontend can tell the two apart, same as the
+                # existing dropped-connection handling.
+                if "(truncated)" in model_used:
+                    yield f"data: {json.dumps({'truncated': True})}\n\n"
+
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(generate(), media_type="text/event-stream")
