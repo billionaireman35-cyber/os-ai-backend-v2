@@ -14,13 +14,17 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: Optional[str] = None
-    verification_code: str
     fingerprint: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: str
     password: str
     fingerprint: Optional[str] = None
+
+class RecoverPasswordRequest(BaseModel):
+    email: str
+    recovery_phrase: str
+    new_password: str
 
 class ChatRequest(BaseModel):
     messages: List[dict]

@@ -44,6 +44,32 @@ def get_top_tokens(limit: int = 50, currency: str = "usd"):
         return []
 
 
+# Cached in-process; this list changes rarely and CoinGecko doesn't need
+# to be hit on every request for it. Refreshed on process restart.
+_supported_currencies_cache = None
+
+
+def get_supported_currencies():
+    """Fetch the list of fiat/currency codes CoinGecko can price against
+    (e.g. usd, eur, gbp, zar, ngn, ...). Cached for the life of the
+    process - this list changes rarely."""
+    global _supported_currencies_cache
+    if _supported_currencies_cache is not None:
+        return _supported_currencies_cache
+    try:
+        url = f"{COINGECKO_API}/simple/supported_vs_currencies"
+        resp = requests.get(url, params=_cg_params(), timeout=10)
+        if resp.status_code == 200:
+            _supported_currencies_cache = resp.json()
+            return _supported_currencies_cache
+        else:
+            logger.error(f"Coingecko supported_vs_currencies error: {resp.status_code} - {resp.text}")
+            return ["usd"]
+    except Exception as e:
+        logger.error(f"Coingecko supported_vs_currencies exception: {e}")
+        return ["usd"]
+
+
 def get_token_price(token_id: str, currency: str = "usd"):
     """Get price for a single token."""
     try:

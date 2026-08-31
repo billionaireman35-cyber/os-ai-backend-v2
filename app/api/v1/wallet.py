@@ -20,15 +20,44 @@ logger = logging.getLogger(__name__)
 wallet_router = router
 
 @router.get("/balance")
-async def get_balance(user=Depends(get_current_user)):
+async def get_balance(currency: str = Query(None), user=Depends(get_current_user)):
     if not user:
         raise HTTPException(401, "Authentication required")
     try:
-        balances = get_user_balance(user["id"])
+        # Explicit ?currency= wins; otherwise fall back to the user's
+        # saved preference, defaulting to USD if neither is set.
+        target_currency = currency or user.get("preferred_currency") or "USD"
+        balances = get_user_balance(user["id"], currency=target_currency)
         return {"balances": balances}
     except Exception as e:
         logger.error(f"Balance fetch failed: {e}")
         raise HTTPException(500, "Failed to fetch balances")
+
+
+@router.get("/supported-currencies")
+async def supported_currencies(user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    from app.services.fx_service import get_supported_fx_currencies
+    return {"currencies": ["USD"] + get_supported_fx_currencies()}
+
+
+@router.put("/preferred-currency")
+async def set_preferred_currency(
+    currency: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    from app.services.fx_service import get_supported_fx_currencies
+    currency = currency.upper().strip()
+    if currency != "USD" and currency not in get_supported_fx_currencies():
+        raise HTTPException(400, f"Unsupported currency: {currency}")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("UPDATE users SET preferred_currency = %s WHERE id = %s", (currency, user["id"]))
+            conn.commit()
+    return {"preferred_currency": currency}
 
 @router.get("/transactions")
 async def get_transactions(

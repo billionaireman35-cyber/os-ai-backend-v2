@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     MEMORY_RETRIEVAL_LIMIT: int = 5
 
     COINGECKO_KEY: str = ""
-    COINGECKO_KEY: str = ""
+    FX_API_KEY: str = ""
     NEWS_API_KEY: str = ""
     GNEWS_API_KEY: str = ""
     SERPAPI_KEY: str = ""
@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     MISTRAL_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
     EXA_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
     DEPOSIT_ADDRESS: str = "0x52b6e0aeD9511A4bCD0c5D454ccBe0EcF4308B7F"
     DEPOSIT_MIN_USD_POLYGON: float = 4.0
     DEPOSIT_MIN_USD_BSC: float = 4.0
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     STAKING_TREASURY_PASSWORD: str
 
     BURN_PER_MESSAGE: int = 25
+    SANDBOX_BURN_AMOUNT: int = 250
     FREE_CLOSE_AMOUNT: int = 500
     GAS_REFILL_THRESHOLD_POL: float = 0.5
     GAS_REFILL_CLOSE_AMOUNT: float = 200

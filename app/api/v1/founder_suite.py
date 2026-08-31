@@ -245,3 +245,61 @@ async def staking_treasury_overview(
         "active_position_count": len(positions),
         "positions": positions[offset:offset + limit],
     }
+
+
+@router.post("/staking-treasury/sweep")
+async def sweep_staking_treasury_funding(
+    user=Depends(get_current_user)
+):
+    """
+    Transfers all currently-unswept staking_treasury_funding (the 15%
+    portion diverted from chat-message burns - see burn_with_staking_split
+    in chat.py) to the staking treasury wallet in a single on-chain
+    transfer, then marks exactly those rows as swept.
+
+    Idempotent-safe: sums and captures the specific row ids to sweep
+    BEFORE sending on-chain, then updates only those ids afterward - a
+    row that arrives after this sum started is left unswept for the next
+    call, never double-counted or lost.
+    """
+    _require_founder(user)
+
+    from app.services.blockchain import send_close_from_distribution
+    from app.services.staking_service import STAKING_TREASURY_ADDRESS
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, amount FROM staking_treasury_funding WHERE swept = FALSE
+            """)
+            rows = c.fetchall()
+
+    if not rows:
+        return {"swept": False, "amount": 0, "row_count": 0, "message": "Nothing to sweep"}
+
+    row_ids = [r[0] for r in rows]
+    total_amount = sum(r[1] for r in rows)
+
+    try:
+        tx_hash = send_close_from_distribution(STAKING_TREASURY_ADDRESS, total_amount)
+    except Exception as e:
+        logger.error(f"Staking treasury sweep failed to broadcast: {e}")
+        raise HTTPException(502, f"On-chain transfer failed: {e}")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE staking_treasury_funding
+                SET swept = TRUE, swept_at = NOW(), sweep_tx_hash = %s
+                WHERE id = ANY(%s)
+            """, (tx_hash, row_ids))
+            conn.commit()
+
+    logger.info(f"Staking treasury sweep: {total_amount} CLOSE, {len(row_ids)} rows, tx={tx_hash}")
+    return {
+        "swept": True,
+        "amount": total_amount,
+        "row_count": len(row_ids),
+        "tx_hash": tx_hash,
+        "treasury_address": STAKING_TREASURY_ADDRESS,
+    }
