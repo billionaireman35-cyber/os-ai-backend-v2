@@ -95,6 +95,7 @@ def ensure_bootstrapped(user_id: str, user_address: str, user_private_key: str):
         drip_tx = {
             'from': relayer_address, 'to': user_address, 'value': BOOTSTRAP_DRIP_POL_WEI,
             'nonce': nonce, 'gas': 21000, 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         }
         drip_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, drip_tx)
     logger.info(f"Bootstrap drip sent to {user_address}, tx: {drip_hash}")
