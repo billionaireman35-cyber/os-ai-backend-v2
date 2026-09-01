@@ -116,6 +116,7 @@ def ensure_bootstrapped(user_id: str, user_address: str, user_private_key: str):
         )
         tx = contract.functions.approve(relayer_address, LARGE_ALLOWANCE_WEI).build_transaction({
             'from': user_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         approve_hash = send_raw_tx(web3, user_private_key, tx)
     logger.info(f"User {user_address} approved relayer, tx: {approve_hash}")
@@ -160,6 +161,7 @@ def sponsored_close_send(user_id: str, user_address: str, to_address: str, amoun
         )
         fee_tx = contract.functions.transferFrom(user_address, relayer_address, fee_wei).build_transaction({
             'from': relayer_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         fee_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, fee_tx)
 
@@ -170,6 +172,7 @@ def sponsored_close_send(user_id: str, user_address: str, to_address: str, amoun
         )
         send_tx = contract.functions.transferFrom(user_address, to_address, amount_wei).build_transaction({
             'from': relayer_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         send_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, send_tx)
 
