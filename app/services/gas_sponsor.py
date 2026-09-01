@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 DAILY_SPONSORED_TX_CAP = 3
 SPONSOR_FEE_CLOSE = 0.5
-BOOTSTRAP_DRIP_POL_WEI = 3_000_000_000_000_000  # 0.003 POL, one approve() worth
+BOOTSTRAP_DRIP_POL_WEI = 30_000_000_000_000_000  # 0.03 POL - real approve() gas cost has run ~0.016 POL; this gives real headroom against gas price fluctuation, not just today's exact cost
 LARGE_ALLOWANCE_WEI = 2**200
 
 SPONSOR_ERC20_ABI = ERC20_ABI + [

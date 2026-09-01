@@ -96,6 +96,7 @@ def _approve_router_if_needed(web3, wallet_address: str, private_key: str, route
             'nonce': nonce,
             'gas': int(gas_estimate * 1.2),
             'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         approve_hash = send_raw_tx(web3, private_key, tx)
     logger.info(f"Treasury wallet {wallet_address} approved router {router_address}, tx: {approve_hash}")
@@ -160,6 +161,7 @@ def ensure_gas_funded(wallet_address: str, private_key: str, label: str = "treas
                 'nonce': nonce,
                 'gas': 500000,  # swap calldata gas varies; generous fixed cap for a treasury op
                 'gasPrice': web3.eth.gas_price,
+                'chainId': 137,
             }
             tx_hash = send_raw_tx(web3, private_key, tx)
 
