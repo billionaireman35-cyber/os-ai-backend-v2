@@ -7,14 +7,21 @@ import uuid, logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Membership model (locked 2026-08-19): one-time payment, permanent access.
-# No burn, no subscription, no expiry, no renewal. Payment is verified
-# on-chain (see workspace_payment_service.py) rather than debited from an
-# internal DB balance - CLOSE moves for real, to the platform treasury,
-# before access is granted. Do not turn this into a recurring charge or
-# revert to internal-ledger debiting without a deliberate product decision.
 WORKSPACE_CREATE_COST = 5000
 WORKSPACE_JOIN_COST = 6000
+
+# Hustle Hub is a Gold+ feature - matches Foundry's gate. Existing approved
+# members keep access to hubs they've already paid into even if their tier
+# later drops (permanent-access principle, see WORKSPACE_CREATE_COST
+# comment history) - this check only gates NEW entry points: creating a
+# hub, requesting to join, paying to join, and browsing public hubs.
+GATEWAY_MIN_TIERS = {"gold", "platinum"}
+
+
+def _require_tier_access(user: dict):
+    tier = (user or {}).get("stake_tier", "bronze")
+    if tier not in GATEWAY_MIN_TIERS and not (user or {}).get("is_founder"):
+        raise HTTPException(403, "Hustle Hub requires Gold tier or higher (10,000+ CLOSE staked).")
 
 
 def _is_admin(c, workspace_id: str, user_id: str) -> bool:
@@ -36,13 +43,10 @@ async def create_workspace(
 ):
     if not user:
         raise HTTPException(401, "Authentication required")
+    _require_tier_access(user)
 
     user_id = user["id"]
 
-    # If this exact tx_hash was already verified for a previous, failed
-    # create_workspace attempt (payment succeeded, creation itself didn't),
-    # skip re-verification - it would wrongly reject as "already used".
-    # Resume with the existing verified payment instead of re-charging.
     payment_id = get_unresolved_payment(user_id, tx_hash, "create")
     if not payment_id:
         try:
@@ -60,25 +64,17 @@ async def create_workspace(
                 INSERT INTO workspaces (id, name, description, room_code, owner_id, is_public)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (workspace_id, name, description, room_code, user_id, is_public))
-
             c.execute("""
                 INSERT INTO workspace_members (workspace_id, user_id, role, status)
                 VALUES (%s, %s, %s, %s)
             """, (workspace_id, user_id, "admin", "approved"))
-
             conn.commit()
 
-    # Payment is now resolved - link it so a future retry with this same
-    # tx_hash won't be treated as unresolved again.
     link_payment_to_workspace(payment_id, workspace_id)
 
     return {
-        "id": workspace_id,
-        "name": name,
-        "description": description,
-        "room_code": room_code,
-        "owner_id": user_id,
-        "is_public": is_public,
+        "id": workspace_id, "name": name, "description": description,
+        "room_code": room_code, "owner_id": user_id, "is_public": is_public,
         "members": [{"user_id": user_id, "role": "admin", "status": "approved"}]
     }
 
@@ -110,24 +106,63 @@ async def list_workspaces(user=Depends(get_current_user)):
             ]
 
 
+@router.get("/discover")
+async def discover_public_workspaces(
+    query: str = Query("", description="Optional name search"),
+    limit: int = Query(30, ge=1, le=100),
+    user=Depends(get_current_user)
+):
+    """Browse public hubs the user isn't already in - lets someone find a
+    room_code to request-to-join instead of needing it shared out-of-band."""
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    _require_tier_access(user)
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT w.id, w.name, w.description, w.room_code, w.owner_id, w.created_at,
+                       (SELECT COUNT(*) FROM workspace_members WHERE workspace_id = w.id AND status = 'approved') as member_count
+                FROM workspaces w
+                WHERE w.is_public = TRUE
+                AND w.id NOT IN (
+                    SELECT workspace_id FROM workspace_members WHERE user_id = %s
+                )
+                AND (%s = '' OR w.name ILIKE %s)
+                ORDER BY member_count DESC
+                LIMIT %s
+            """, (user["id"], query, f"%{query}%", limit))
+            rows = c.fetchall()
+            return [
+                {
+                    "id": row[0], "name": row[1], "description": row[2], "room_code": row[3],
+                    "owner_id": row[4], "created_at": row[5].isoformat() if row[5] else None,
+                    "member_count": row[6],
+                }
+                for row in rows
+            ]
+
+
 @router.post("/join")
 async def join_workspace(
     room_code: str = Body(...),
     user=Depends(get_current_user)
 ):
-    """Free join REQUEST - no payment yet. Payment happens at approval."""
+    """Free join REQUEST - no payment yet. Payment happens via
+    /requests/submit-payment (self-service) after this."""
     if not user:
         raise HTTPException(401, "Authentication required")
+    _require_tier_access(user)
 
     user_id = user["id"]
 
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT id FROM workspaces WHERE room_code = %s", (room_code.upper(),))
+            c.execute("SELECT id, name FROM workspaces WHERE room_code = %s", (room_code.upper(),))
             row = c.fetchone()
             if not row:
                 raise HTTPException(404, "Workspace not found")
-            workspace_id = row[0]
+            workspace_id, workspace_name = row
 
             c.execute(
                 "SELECT status FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
@@ -136,8 +171,8 @@ async def join_workspace(
             existing = c.fetchone()
             if existing:
                 if existing[0] == "approved":
-                    return {"message": "Already a member"}
-                return {"message": "Join request already pending approval"}
+                    return {"message": "Already a member", "workspace_id": workspace_id, "workspace_name": workspace_name, "status": "approved"}
+                return {"message": "Join request already pending payment", "workspace_id": workspace_id, "workspace_name": workspace_name, "status": "pending"}
 
             c.execute(
                 "INSERT INTO workspace_members (workspace_id, user_id, role, status) VALUES (%s, %s, %s, %s)",
@@ -145,7 +180,71 @@ async def join_workspace(
             )
             conn.commit()
 
-    return {"message": "Join request sent — pending approval from the hub owner"}
+    return {
+        "message": "Join request created — pay 6000 CLOSE to activate membership",
+        "workspace_id": workspace_id, "workspace_name": workspace_name, "status": "pending"
+    }
+
+
+@router.post("/{workspace_id}/requests/submit-payment")
+async def submit_join_payment(
+    workspace_id: str,
+    tx_hash: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    """
+    Self-service: the requester (not an admin) submits their own 6000 CLOSE
+    payment tx_hash directly, right after paying. verify_workspace_payment
+    already checks the tx was sent from THIS user's own registered wallet,
+    so there's no trust gap in skipping the admin relay step - this removes
+    the old "message the admin your hash" friction entirely. The old
+    admin-approve-by-hash endpoint below is kept as a manual fallback.
+
+    Resume-safe: if this exact tx_hash was already verified for this
+    workspace/user (e.g. the membership UPDATE failed after a prior
+    successful verify), skip re-verification instead of rejecting it as
+    "already used" and leaving the user stuck paid-but-not-approved.
+    """
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    _require_tier_access(user)
+    user_id = user["id"]
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT status FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
+                (workspace_id, user_id)
+            )
+            row = c.fetchone()
+            if not row:
+                raise HTTPException(404, "No join request found for this workspace")
+            if row[0] == "approved":
+                return {"message": "Already approved"}
+            if row[0] != "pending":
+                raise HTTPException(400, f"Request is not pending (status: {row[0]})")
+
+            c.execute("""
+                SELECT id FROM workspace_payments
+                WHERE user_id = %s AND tx_hash = %s AND purpose = 'join' AND workspace_id = %s
+            """, (user_id, tx_hash, workspace_id))
+            already_verified = c.fetchone()
+
+    if not already_verified:
+        try:
+            verify_workspace_payment(user_id, tx_hash, WORKSPACE_JOIN_COST, "join", workspace_id)
+        except ValueError as e:
+            raise HTTPException(402, str(e))
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE workspace_members SET status = 'approved' WHERE workspace_id = %s AND user_id = %s",
+                (workspace_id, user_id)
+            )
+            conn.commit()
+
+    return {"message": "Payment verified — you're in"}
 
 
 @router.get("/{workspace_id}/requests")
@@ -173,13 +272,8 @@ async def approve_join_request(
     tx_hash: str = Body(..., embed=True, description="Tx hash of the requester's 6000 CLOSE payment to the treasury address"),
     user=Depends(get_current_user)
 ):
-    """
-    Approves a pending join request. The 6000 CLOSE payment must already be
-    on-chain (paid by the REQUESTER, from their own wallet, to the treasury)
-    before this is called - the admin submits the requester's tx_hash here
-    to confirm and finalize. If payment verification fails (wrong sender,
-    wrong amount, already used), approval is blocked with a 402.
-    """
+    """Manual fallback - admin pastes the requester's hash. Prefer
+    /requests/submit-payment (self-service) going forward."""
     if not user:
         raise HTTPException(401, "Authentication required")
 
@@ -187,7 +281,6 @@ async def approve_join_request(
         with conn.cursor() as c:
             if not _is_admin(c, workspace_id, user["id"]):
                 raise HTTPException(403, "Only the hub owner or admins can approve join requests")
-
             c.execute(
                 "SELECT status FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
                 (workspace_id, requester_id)
@@ -234,6 +327,78 @@ async def reject_join_request(workspace_id: str, requester_id: str, user=Depends
     return {"message": "Request rejected"}
 
 
+@router.get("/{workspace_id}/members")
+async def list_members(workspace_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT id FROM workspace_members WHERE workspace_id = %s AND user_id = %s AND status = 'approved'",
+                (workspace_id, user["id"])
+            )
+            if not c.fetchone():
+                raise HTTPException(403, "Not an approved member of this workspace")
+            c.execute("""
+                SELECT m.user_id, u.name, m.role, m.joined_at
+                FROM workspace_members m
+                LEFT JOIN users u ON u.id = m.user_id
+                WHERE m.workspace_id = %s AND m.status = 'approved'
+                ORDER BY m.joined_at ASC
+            """, (workspace_id,))
+            rows = c.fetchall()
+            return [
+                {"user_id": r[0], "user_name": r[1] or "Unknown", "role": r[2],
+                 "joined_at": r[3].isoformat() if r[3] else None}
+                for r in rows
+            ]
+
+
+@router.post("/{workspace_id}/members/{member_user_id}/remove")
+async def remove_member(workspace_id: str, member_user_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            if not _is_admin(c, workspace_id, user["id"]):
+                raise HTTPException(403, "Only the hub owner or admins can remove members")
+            c.execute("SELECT owner_id FROM workspaces WHERE id = %s", (workspace_id,))
+            row = c.fetchone()
+            if row and row[0] == member_user_id:
+                raise HTTPException(400, "Cannot remove the hub owner")
+            c.execute(
+                "DELETE FROM workspace_members WHERE workspace_id = %s AND user_id = %s AND status = 'approved'",
+                (workspace_id, member_user_id)
+            )
+            if c.rowcount == 0:
+                raise HTTPException(404, "Member not found")
+            conn.commit()
+    return {"message": "Member removed"}
+
+
+@router.post("/{workspace_id}/leave")
+async def leave_workspace(workspace_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    user_id = user["id"]
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT owner_id FROM workspaces WHERE id = %s", (workspace_id,))
+            row = c.fetchone()
+            if not row:
+                raise HTTPException(404, "Workspace not found")
+            if row[0] == user_id:
+                raise HTTPException(400, "The hub owner can't leave. Remove the hub or transfer ownership instead.")
+            c.execute(
+                "DELETE FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
+                (workspace_id, user_id)
+            )
+            if c.rowcount == 0:
+                raise HTTPException(404, "You're not a member of this workspace")
+            conn.commit()
+    return {"message": "Left workspace"}
+
+
 @router.get("/{workspace_id}/messages")
 async def get_workspace_messages(
     workspace_id: str,
@@ -251,9 +416,9 @@ async def get_workspace_messages(
             if not c.fetchone():
                 raise HTTPException(403, "Not an approved member of this workspace")
             c.execute("""
-                SELECT id, user_id, content, is_ai, created_at
+                SELECT id, user_id, content, is_ai, created_at, edited_at
                 FROM workspace_messages
-                WHERE workspace_id = %s
+                WHERE workspace_id = %s AND deleted_at IS NULL
                 ORDER BY created_at ASC
                 LIMIT %s
             """, (workspace_id, limit))
@@ -266,7 +431,8 @@ async def get_workspace_messages(
                     "id": row[0], "user_id": row[1],
                     "user_name": user_row[0] if user_row else "Unknown",
                     "content": row[2], "is_ai": row[3],
-                    "created_at": row[4].isoformat() if row[4] else None
+                    "created_at": row[4].isoformat() if row[4] else None,
+                    "edited_at": row[5].isoformat() if row[5] else None,
                 })
             return messages
 
@@ -294,3 +460,53 @@ async def send_workspace_message(
             """, (msg_id, workspace_id, user["id"], content))
             conn.commit()
     return {"id": msg_id, "content": content, "user_id": user["id"], "user_name": user.get("name", "User")}
+
+
+@router.put("/{workspace_id}/message/{message_id}")
+async def edit_workspace_message(
+    workspace_id: str,
+    message_id: str,
+    content: str = Body(..., embed=True),
+    user=Depends(get_current_user)
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT user_id FROM workspace_messages WHERE id = %s AND workspace_id = %s AND deleted_at IS NULL",
+                (message_id, workspace_id)
+            )
+            row = c.fetchone()
+            if not row:
+                raise HTTPException(404, "Message not found")
+            if row[0] != user["id"]:
+                raise HTTPException(403, "You can only edit your own messages")
+            c.execute(
+                "UPDATE workspace_messages SET content = %s, edited_at = NOW() WHERE id = %s",
+                (content, message_id)
+            )
+            conn.commit()
+    return {"message": "Edited"}
+
+
+@router.delete("/{workspace_id}/message/{message_id}")
+async def delete_workspace_message(workspace_id: str, message_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT user_id FROM workspace_messages WHERE id = %s AND workspace_id = %s AND deleted_at IS NULL",
+                (message_id, workspace_id)
+            )
+            row = c.fetchone()
+            if not row:
+                raise HTTPException(404, "Message not found")
+            is_owner_of_msg = row[0] == user["id"]
+            is_ws_admin = _is_admin(c, workspace_id, user["id"])
+            if not is_owner_of_msg and not is_ws_admin:
+                raise HTTPException(403, "You can only delete your own messages")
+            c.execute("UPDATE workspace_messages SET deleted_at = NOW() WHERE id = %s", (message_id,))
+            conn.commit()
+    return {"message": "Deleted"}
