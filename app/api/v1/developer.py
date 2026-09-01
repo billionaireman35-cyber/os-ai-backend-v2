@@ -22,6 +22,9 @@ def generate_api_key():
 async def create_api_key(req: dict, user=Depends(get_current_user)):
     if not user:
         raise HTTPException(401, "Authentication required")
+    tier = user.get("stake_tier", "bronze")
+    if tier not in ("gold", "platinum") and not user.get("is_founder"):
+        raise HTTPException(403, "API keys require Gold tier or higher (10,000+ CLOSE staked).")
     label = req.get("label", "Unlabelled")
     scopes = req.get("scopes", "chat,research,portfolio")
     api_key = generate_api_key()
