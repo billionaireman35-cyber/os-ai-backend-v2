@@ -111,7 +111,8 @@ def burn_close(amount: int) -> str:
             'from': from_address,
             'nonce': nonce,
             'gas': gas_limit,
-            'gasPrice': web3.eth.gas_price
+            'gasPrice': web3.eth.gas_price,
+            'chainId': 137
         })
         return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)
 
@@ -132,7 +133,8 @@ def send_close_from_distribution(to_address: str, amount: int) -> str:
             'from': from_address,
             'nonce': nonce,
             'gas': gas_limit,
-            'gasPrice': web3.eth.gas_price
+            'gasPrice': web3.eth.gas_price,
+            'chainId': 137
         })
         return send_raw_tx(web3, settings.DISTRIBUTION_WALLET_PRIVATE_KEY, tx)
 
@@ -361,6 +363,7 @@ def send_close_from_wallet(from_address: str, from_private_key: str, to_address:
             'from': from_address,
             'nonce': nonce,
             'gas': gas_limit,
-            'gasPrice': web3.eth.gas_price
+            'gasPrice': web3.eth.gas_price,
+            'chainId': 137
         })
         return send_raw_tx(web3, from_private_key, tx)

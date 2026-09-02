@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 DAILY_SPONSORED_TX_CAP = 3
 SPONSOR_FEE_CLOSE = 0.5
-BOOTSTRAP_DRIP_POL_WEI = 3_000_000_000_000_000  # 0.003 POL, one approve() worth
+BOOTSTRAP_DRIP_POL_WEI = 30_000_000_000_000_000  # 0.03 POL - real approve() gas cost has run ~0.016 POL; this gives real headroom against gas price fluctuation, not just today's exact cost
 LARGE_ALLOWANCE_WEI = 2**200
 
 SPONSOR_ERC20_ABI = ERC20_ABI + [
@@ -95,6 +95,7 @@ def ensure_bootstrapped(user_id: str, user_address: str, user_private_key: str):
         drip_tx = {
             'from': relayer_address, 'to': user_address, 'value': BOOTSTRAP_DRIP_POL_WEI,
             'nonce': nonce, 'gas': 21000, 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         }
         drip_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, drip_tx)
     logger.info(f"Bootstrap drip sent to {user_address}, tx: {drip_hash}")
@@ -116,6 +117,7 @@ def ensure_bootstrapped(user_id: str, user_address: str, user_private_key: str):
         )
         tx = contract.functions.approve(relayer_address, LARGE_ALLOWANCE_WEI).build_transaction({
             'from': user_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         approve_hash = send_raw_tx(web3, user_private_key, tx)
     logger.info(f"User {user_address} approved relayer, tx: {approve_hash}")
@@ -160,6 +162,7 @@ def sponsored_close_send(user_id: str, user_address: str, to_address: str, amoun
         )
         fee_tx = contract.functions.transferFrom(user_address, relayer_address, fee_wei).build_transaction({
             'from': relayer_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         fee_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, fee_tx)
 
@@ -170,6 +173,7 @@ def sponsored_close_send(user_id: str, user_address: str, to_address: str, amoun
         )
         send_tx = contract.functions.transferFrom(user_address, to_address, amount_wei).build_transaction({
             'from': relayer_address, 'nonce': nonce, 'gas': int(gas_estimate * 1.2), 'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         send_hash = send_raw_tx(web3, settings.RELAYER_WALLET_PRIVATE_KEY, send_tx)
 

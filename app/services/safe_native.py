@@ -64,6 +64,7 @@ def create_safe(owners: list, threshold: int, chain: str = "polygon") -> str:
             'from': deployer_address,
             'nonce': nonce,
             'gasPrice': web3.eth.gas_price,
+            'chainId': 137,
         })
         gas_estimate = web3.eth.estimate_gas(tx)
         tx['gas'] = int(gas_estimate * 1.3)
