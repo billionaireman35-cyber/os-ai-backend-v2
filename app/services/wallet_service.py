@@ -370,9 +370,9 @@ def send_transaction(
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (str(uuid.uuid4()), user_id, "send", human_amount, tx_hash, chain, "completed"))
+                INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status, wallet_address)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (str(uuid.uuid4()), user_id, "send", human_amount, tx_hash, chain, "completed", from_address))
             conn.commit()
     return tx_hash
 
@@ -419,9 +419,9 @@ def sign_and_broadcast_swap(
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (str(uuid.uuid4()), user_id, "swap", 0, tx_hash, chain, "completed"))
+                INSERT INTO close_transactions (id, user_id, type, amount, tx_hash, chain, status, wallet_address)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (str(uuid.uuid4()), user_id, "swap", 0, tx_hash, chain, "completed", from_address))
             conn.commit()
     return tx_hash
 

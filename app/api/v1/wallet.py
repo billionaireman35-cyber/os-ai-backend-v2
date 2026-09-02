@@ -271,7 +271,10 @@ async def request_withdrawal(
 
 
 @router.get("/transactions/history")
-async def transaction_history(user=Depends(get_current_user)):
+async def transaction_history(
+    wallet_address: str = Query(None, description="Filter to a specific owned wallet. Only close_transactions (send/swap/burn) are wallet-scoped - deposits and withdrawals are account-level and are omitted when this filter is set, since they cannot be honestly attributed to one wallet."),
+    user=Depends(get_current_user)
+):
     if not user:
         raise HTTPException(401, "Authentication required")
     user_id = user["id"]
@@ -279,39 +282,64 @@ async def transaction_history(user=Depends(get_current_user)):
 
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("""
-                SELECT id, type, amount, status, tx_hash, created
-                FROM close_transactions WHERE user_id = %s ORDER BY created DESC LIMIT 50
-            """, (user_id,))
-            for row in c.fetchall():
-                history.append({
-                    "kind": row[1], "amount": float(row[2]), "status": row[3],
-                    "tx_hash": row[4], "created": row[5].isoformat() if row[5] else None
-                })
+            if wallet_address:
+                # Ownership check - same pattern as balance/send/sign.
+                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+                row = c.fetchone()
+                is_primary = row and row[0] == wallet_address
+                if not is_primary:
+                    c.execute(
+                        "SELECT id FROM os_wallets WHERE user_id = %s AND address = %s",
+                        (user_id, wallet_address)
+                    )
+                    if not c.fetchone():
+                        raise HTTPException(404, "Wallet not found or not owned by this account.")
 
-            c.execute("""
-                SELECT chain, token_symbol, amount, usd_value, close_credited, tx_hash, created
-                FROM crypto_deposits WHERE user_id = %s ORDER BY created DESC LIMIT 50
-            """, (user_id,))
-            for row in c.fetchall():
-                history.append({
-                    "kind": "deposit", "chain": row[0], "token_symbol": row[1],
-                    "amount": float(row[2]), "usd_value": float(row[3]),
-                    "close_credited": row[4], "tx_hash": row[5],
-                    "created": row[6].isoformat() if row[6] else None
-                })
+                c.execute("""
+                    SELECT id, type, amount, status, tx_hash, created
+                    FROM close_transactions WHERE user_id = %s AND wallet_address = %s ORDER BY created DESC LIMIT 50
+                """, (user_id, wallet_address))
+                for row in c.fetchall():
+                    history.append({
+                        "kind": row[1], "amount": float(row[2]), "status": row[3],
+                        "tx_hash": row[4], "created": row[5].isoformat() if row[5] else None
+                    })
+                # crypto_deposits and withdrawal_requests intentionally
+                # omitted here - see docstring above.
+            else:
+                c.execute("""
+                    SELECT id, type, amount, status, tx_hash, created
+                    FROM close_transactions WHERE user_id = %s ORDER BY created DESC LIMIT 50
+                """, (user_id,))
+                for row in c.fetchall():
+                    history.append({
+                        "kind": row[1], "amount": float(row[2]), "status": row[3],
+                        "tx_hash": row[4], "created": row[5].isoformat() if row[5] else None
+                    })
 
-            c.execute("""
-                SELECT chain, token_symbol, amount, destination_address, status, tx_hash, created
-                FROM withdrawal_requests WHERE user_id = %s ORDER BY created DESC LIMIT 50
-            """, (user_id,))
-            for row in c.fetchall():
-                history.append({
-                    "kind": "withdrawal", "chain": row[0], "token_symbol": row[1],
-                    "amount": float(row[2]), "destination_address": row[3],
-                    "status": row[4], "tx_hash": row[5],
-                    "created": row[6].isoformat() if row[6] else None
-                })
+                c.execute("""
+                    SELECT chain, token_symbol, amount, usd_value, close_credited, tx_hash, created
+                    FROM crypto_deposits WHERE user_id = %s ORDER BY created DESC LIMIT 50
+                """, (user_id,))
+                for row in c.fetchall():
+                    history.append({
+                        "kind": "deposit", "chain": row[0], "token_symbol": row[1],
+                        "amount": float(row[2]), "usd_value": float(row[3]),
+                        "close_credited": row[4], "tx_hash": row[5],
+                        "created": row[6].isoformat() if row[6] else None
+                    })
+
+                c.execute("""
+                    SELECT chain, token_symbol, amount, destination_address, status, tx_hash, created
+                    FROM withdrawal_requests WHERE user_id = %s ORDER BY created DESC LIMIT 50
+                """, (user_id,))
+                for row in c.fetchall():
+                    history.append({
+                        "kind": "withdrawal", "chain": row[0], "token_symbol": row[1],
+                        "amount": float(row[2]), "destination_address": row[3],
+                        "status": row[4], "tx_hash": row[5],
+                        "created": row[6].isoformat() if row[6] else None
+                    })
 
     history.sort(key=lambda x: x["created"] or "", reverse=True)
     return {"history": history}

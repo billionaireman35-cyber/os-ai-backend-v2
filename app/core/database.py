@@ -413,6 +413,13 @@ def init_db():
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS fee_paid BOOLEAN DEFAULT FALSE")
                 c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS reference_id UUID")
+                c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS wallet_address TEXT")
+                c.execute("""
+                    UPDATE close_transactions ct
+                    SET wallet_address = u.wallet_address
+                    FROM users u
+                    WHERE ct.user_id = u.id AND ct.wallet_address IS NULL
+                """)
                 c.execute("ALTER TABLE workspace_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
                 c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '{}'")
                 c.execute("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP")
