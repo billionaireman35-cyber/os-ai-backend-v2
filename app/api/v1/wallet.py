@@ -20,15 +20,23 @@ logger = logging.getLogger(__name__)
 wallet_router = router
 
 @router.get("/balance")
-async def get_balance(currency: str = Query(None), user=Depends(get_current_user)):
+async def get_balance(
+    currency: str = Query(None),
+    wallet_address: str = Query(None, description="View a specific imported wallet's balance instead of the primary wallet"),
+    user=Depends(get_current_user)
+):
     if not user:
         raise HTTPException(401, "Authentication required")
     try:
         # Explicit ?currency= wins; otherwise fall back to the user's
         # saved preference, defaulting to USD if neither is set.
         target_currency = currency or user.get("preferred_currency") or "USD"
-        balances = get_user_balance(user["id"], currency=target_currency)
+        balances = get_user_balance(user["id"], currency=target_currency, wallet_address=wallet_address)
+        if isinstance(balances, dict) and balances.get("error"):
+            raise HTTPException(404, balances["error"])
         return {"balances": balances}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Balance fetch failed: {e}")
         raise HTTPException(500, "Failed to fetch balances")

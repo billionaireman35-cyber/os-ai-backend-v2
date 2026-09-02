@@ -108,7 +108,7 @@ def create_wallet_for_user(user_id: str, password: str) -> dict:
         "encrypted_private_key": encrypted_key,
     }
 
-def get_user_balance(user_id: str, currency: str = "USD") -> dict:
+def get_user_balance(user_id: str, currency: str = "USD", wallet_address: str = None) -> dict:
     from app.services.fx_service import get_fx_rate
     fx_rate = get_fx_rate(currency)
     with get_db() as conn:
@@ -117,8 +117,24 @@ def get_user_balance(user_id: str, currency: str = "USD") -> dict:
             row = c.fetchone()
             if not row or not row[0]:
                 return {"error": "No wallet address found. Please create a wallet first."}
-            address = row[0]
             internal_close_balance = row[1] or 0
+
+            if wallet_address:
+                # Ownership check - only show balances for a wallet this
+                # user actually owns (primary or one of their imports).
+                if wallet_address == row[0]:
+                    address = wallet_address
+                else:
+                    c.execute(
+                        "SELECT address FROM os_wallets WHERE user_id = %s AND address = %s",
+                        (user_id, wallet_address)
+                    )
+                    owned = c.fetchone()
+                    if not owned:
+                        return {"error": "Wallet not found or not owned by this account."}
+                    address = wallet_address
+            else:
+                address = row[0]
 
             # Fetch on-chain balances (native + tokens)
             raw_balances = get_all_balances(address)
