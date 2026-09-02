@@ -121,6 +121,7 @@ async def execute_swap(
     data: str = Body(..., description="Encoded swap calldata, from /swap response"),
     value: str = Body("0", description="Transaction value in wei, from /swap response"),
     password: str = Body(...),
+    wallet_address: str = Body(None, description="Swap from a specific imported wallet instead of the primary wallet"),
     user=Depends(get_current_user)
 ):
     """
@@ -143,6 +144,7 @@ async def execute_swap(
             to_address=to,
             data=data,
             value_wei=int(value),
+            wallet_address=wallet_address,
         )
         return {"tx_hash": tx_hash}
     except ValueError as e:
@@ -157,6 +159,7 @@ async def send_sponsored(
     to_address: str = Body(...),
     amount: float = Body(...),
     password: str = Body(...),
+    wallet_address: str = Body(None, description="Send from a specific imported wallet instead of the primary wallet"),
     user=Depends(get_current_user)
 ):
     """
@@ -180,15 +183,20 @@ async def send_sponsored(
     from app.services import gas_sponsor
 
     try:
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
-                row = c.fetchone()
-                if not row or not row[0]:
-                    raise HTTPException(400, "No wallet address found")
-                user_address = row[0]
+        if wallet_address:
+            # Ownership verified inside get_user_private_key below (query
+            # is scoped to user_id AND address - raises if not owned).
+            user_address = wallet_address
+        else:
+            with get_db() as conn:
+                with conn.cursor() as c:
+                    c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
+                    row = c.fetchone()
+                    if not row or not row[0]:
+                        raise HTTPException(400, "No wallet address found")
+                    user_address = row[0]
 
-        private_key = get_user_private_key(user["id"], password)
+        private_key = get_user_private_key(user["id"], password, wallet_address)
 
         gas_sponsor.ensure_bootstrapped(user["id"], user_address, private_key)
         result = gas_sponsor.sponsored_close_send(

@@ -96,6 +96,7 @@ async def create_wallet(
 @router.post("/export-private-key")
 async def export_private_key(
     password: str = Body(..., embed=True),
+    wallet_address: str = Body(None, embed=True, description="Export a specific imported wallet's key instead of the primary wallet's"),
     user=Depends(get_current_user)
 ):
     """
@@ -110,11 +111,13 @@ async def export_private_key(
     if not user:
         raise HTTPException(401, "Authentication required")
     try:
-        private_key_hex = get_user_private_key(user["id"], password)
+        private_key_hex = get_user_private_key(user["id"], password, wallet_address)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception:
         raise HTTPException(400, "Incorrect password")
 
-    logger.info(f"User {user['id']} exported their private key")
+    logger.info(f"User {user['id']} exported a private key (wallet_address={wallet_address or 'primary'})")
     return {"private_key": private_key_hex}
 
 
@@ -351,6 +354,7 @@ async def send(
     password: str = Body(...),
     token_address: str = Body(None),
     data: str = Body("0x"),
+    wallet_address: str = Body(None, description="Send from a specific imported wallet instead of the primary wallet"),
     user=Depends(get_current_user)
 ):
     if not user:
@@ -365,9 +369,12 @@ async def send(
             to_address=to_address,
             amount_wei=amount_wei,
             token_address=token_address,
-            data=data
+            data=data,
+            wallet_address=wallet_address
         )
         return {"tx_hash": tx_hash}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"Send failed: {e}")
         raise HTTPException(500, f"Send failed: {str(e)}")
@@ -377,6 +384,7 @@ async def sign(
     chain: str = Body(...),
     transaction: dict = Body(...),  # expects {to, value, data?, gas?, gasPrice?, nonce?}
     password: str = Body(...),
+    wallet_address: str = Body(None, description="Sign from a specific imported wallet instead of the primary wallet"),
     user=Depends(get_current_user)
 ):
     if not user:
@@ -384,17 +392,20 @@ async def sign(
     if len(password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     try:
-        private_key_hex = get_user_private_key(user["id"], password)
+        private_key_hex = get_user_private_key(user["id"], password, wallet_address)
         from app.services.transaction import sign_transaction
-        # We need from_address; get it from user's wallet
-        from app.core.database import get_db
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
-                row = c.fetchone()
-                if not row or not row[0]:
-                    raise HTTPException(400, "No wallet address found")
-                from_address = row[0]
+        if wallet_address:
+            # Ownership already verified inside get_user_private_key above.
+            from_address = wallet_address
+        else:
+            from app.core.database import get_db
+            with get_db() as conn:
+                with conn.cursor() as c:
+                    c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
+                    row = c.fetchone()
+                    if not row or not row[0]:
+                        raise HTTPException(400, "No wallet address found")
+                    from_address = row[0]
         signed_hex = sign_transaction(
             chain=chain,
             from_address=from_address,

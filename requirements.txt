@@ -33,3 +33,5 @@ openpyxl==3.1.5
 anthropic>=0.69.0
 python-multipart
 eth-account==0.5.9
+mnemonic
+bip32utils

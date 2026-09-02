@@ -8,6 +8,8 @@ from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
 from ecdsa import SigningKey, SECP256k1
+from mnemonic import Mnemonic
+from bip32utils import BIP32Key, BIP32_HARDEN
 from app.core.database import get_db
 from app.core.config import settings
 from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution, get_web3, ERC20_ABI
@@ -258,10 +260,26 @@ def get_user_transactions(user_id: str, limit: int = 20) -> list:
                 for row in rows
             ]
 
-def get_user_private_key(user_id: str, password: str) -> str:
+def get_user_private_key(user_id: str, password: str, wallet_address: str = None) -> str:
+    """If wallet_address is given, looks up that specific os_wallets row -
+    scoped to (user_id, address), so a user can never reach a wallet they
+    don't own even by guessing an address. If omitted, falls back to the
+    user's primary wallet (users.wallet_address) rather than an
+    unordered LIMIT 1, which was previously non-deterministic once a
+    user had more than one os_wallets row."""
     with get_db() as conn:
         with conn.cursor() as c:
-            c.execute("SELECT encrypted_key FROM os_wallets WHERE user_id = %s LIMIT 1", (user_id,))
+            if wallet_address:
+                c.execute(
+                    "SELECT encrypted_key FROM os_wallets WHERE user_id = %s AND address = %s",
+                    (user_id, wallet_address)
+                )
+            else:
+                c.execute("""
+                    SELECT ow.encrypted_key FROM os_wallets ow
+                    JOIN users u ON u.wallet_address = ow.address
+                    WHERE ow.user_id = %s AND u.id = %s
+                """, (user_id, user_id))
             row = c.fetchone()
             if not row or not row[0]:
                 raise ValueError("No wallet found for user")
@@ -275,17 +293,24 @@ def send_transaction(
     to_address: str,
     amount_wei: int,
     token_address: str = None,
-    data: str = "0x"
+    data: str = "0x",
+    wallet_address: str = None
 ) -> str:
-    private_key_hex = get_user_private_key(user_id, password)
+    private_key_hex = get_user_private_key(user_id, password, wallet_address)
 
-    with get_db() as conn:
-        with conn.cursor() as c:
-            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
-            row = c.fetchone()
-            if not row or not row[0]:
-                raise ValueError("No wallet address found")
-            from_address = row[0]
+    if wallet_address:
+        # Ownership already verified inside get_user_private_key above
+        # (the query is scoped to user_id AND address - it raises if no
+        # matching row exists for this user).
+        from_address = wallet_address
+    else:
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+                row = c.fetchone()
+                if not row or not row[0]:
+                    raise ValueError("No wallet address found")
+                from_address = row[0]
 
     if token_address:
         def pad_hex(value, length=64):
@@ -342,6 +367,7 @@ def sign_and_broadcast_swap(
     to_address: str,
     data: str,
     value_wei: int = 0,
+    wallet_address: str = None,
 ) -> str:
     """
     Signs and broadcasts arbitrary contract calldata (e.g. a KyberSwap
@@ -350,15 +376,18 @@ def sign_and_broadcast_swap(
     rather than a simple transfer. to_address is the router contract,
     data is the encoded swap calldata from POST /swap (route/build).
     """
-    private_key_hex = get_user_private_key(user_id, password)
+    private_key_hex = get_user_private_key(user_id, password, wallet_address)
 
-    with get_db() as conn:
-        with conn.cursor() as c:
-            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
-            row = c.fetchone()
-            if not row or not row[0]:
-                raise ValueError("No wallet address found")
-            from_address = row[0]
+    if wallet_address:
+        from_address = wallet_address
+    else:
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+                row = c.fetchone()
+                if not row or not row[0]:
+                    raise ValueError("No wallet address found")
+                from_address = row[0]
 
     from app.services.transaction import sign_transaction, broadcast_transaction
     signed_hex = sign_transaction(
@@ -394,3 +423,101 @@ def decrypt_private_key(encrypted_key: str, password: str) -> str:
     cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
     plaintext = cipher.decrypt(ciphertext)
     return plaintext.decode('utf-8')
+
+
+# ------------------------------------------------------------------------------
+# WALLET IMPORT (private key / seed phrase)
+# ------------------------------------------------------------------------------
+# NOTE: `decrypt_private_key` above (no leading underscore) is broken - its
+# JSON/hex format does not match what `_encrypt_private_key` actually
+# produces (raw salt+nonce+tag+ciphertext, base64). Do not call it. The
+# functions below use the real, working pair: _encrypt_private_key /
+# _decrypt_private_key.
+
+def _private_key_hex_to_address(private_key_hex: str) -> str:
+    """Same derivation create_wallet_for_user uses: ecdsa keypair -> keccak
+    of the uncompressed public key -> last 20 bytes -> checksum address.
+    Used here so an imported key always resolves to the same address a
+    freshly-generated wallet's key would."""
+    key_int = int(private_key_hex, 16)
+    if not (0 < key_int < SECP256K1_N):
+        raise ValueError("Private key out of range")
+    sk = SigningKey.from_string(bytes.fromhex(private_key_hex), curve=SECP256k1)
+    public_key_bytes = sk.get_verifying_key().to_string()
+    return to_checksum_address("0x" + keccak(public_key_bytes).hex()[-40:])
+
+
+def _normalize_private_key_hex(raw: str) -> str:
+    """Validates and normalizes user-supplied private key input. Accepts
+    an optional 0x prefix. Raises ValueError with a clear message on any
+    malformed input, rather than silently proceeding."""
+    key = raw.strip()
+    if key.lower().startswith("0x"):
+        key = key[2:]
+    if len(key) != 64:
+        raise ValueError(f"Invalid private key length: expected 64 hex characters, got {len(key)}")
+    try:
+        int(key, 16)
+    except ValueError:
+        raise ValueError("Private key must be a valid hexadecimal string")
+    return key.lower()
+
+
+def _finalize_wallet_import(user_id: str, private_key_hex: str, password: str, label: str, chain: str = "polygon") -> dict:
+    """Shared final step for both import paths: derive the address,
+    reject a duplicate for this user, encrypt, and insert into
+    os_wallets. Never returns plaintext key material."""
+    address = _private_key_hex_to_address(private_key_hex)
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT id FROM os_wallets WHERE user_id = %s AND address = %s",
+                (user_id, address)
+            )
+            if c.fetchone():
+                raise ValueError(f"This wallet ({address}) is already imported to your account.")
+
+            encrypted_key = _encrypt_private_key(private_key_hex, password)
+            wallet_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO os_wallets (id, user_id, chain, address, encrypted_key, label)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (wallet_id, user_id, chain, address, encrypted_key, label))
+            conn.commit()
+
+    return {"id": wallet_id, "address": address, "label": label, "chain": chain}
+
+
+def import_wallet_from_private_key(user_id: str, private_key_hex: str, password: str, label: str = "Imported") -> dict:
+    """Import an existing EVM wallet from a raw private key. Validates
+    format and range before ever touching encryption or the database -
+    a malformed key fails loudly here, not as a confusing error later."""
+    normalized = _normalize_private_key_hex(private_key_hex)
+    return _finalize_wallet_import(user_id, normalized, password, label)
+
+
+def import_wallet_from_mnemonic(user_id: str, mnemonic_phrase: str, password: str, label: str = "Imported", passphrase: str = "") -> dict:
+    """Import an EVM wallet from a BIP-39 seed phrase, using the standard
+    BIP-44 Ethereum derivation path (m/44'/60'/0'/0/0) - the same default
+    MetaMask, Trust Wallet, and virtually every EVM wallet uses, so the
+    derived address matches what the user sees in their other wallet
+    software. Validates the mnemonic's checksum before deriving anything."""
+    phrase = mnemonic_phrase.strip()
+    mnemo = Mnemonic("english")
+    if not mnemo.check(phrase):
+        raise ValueError("Invalid seed phrase (failed BIP-39 checksum validation). Check for typos or missing/extra words.")
+
+    seed_bytes = mnemo.to_seed(phrase, passphrase=passphrase)
+    master_key = BIP32Key.fromEntropy(seed_bytes)
+    derived_key = (
+        master_key
+        .ChildKey(44 + BIP32_HARDEN)
+        .ChildKey(60 + BIP32_HARDEN)
+        .ChildKey(0 + BIP32_HARDEN)
+        .ChildKey(0)
+        .ChildKey(0)
+    )
+    private_key_hex = derived_key.PrivateKey().hex()
+
+    return _finalize_wallet_import(user_id, private_key_hex, password, label)

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, founder, founder_suite, staking, governance
 from app.api.v1 import sandbox
+from app.api.v1 import wallet_import
 from app.api.v1 import developer, wc, workspace, notifications, leaderboard, gateway
 
 router = APIRouter()
@@ -22,5 +23,6 @@ router.include_router(founder_suite.router, prefix="/founder-suite", tags=["Foun
 router.include_router(staking.router, prefix="/staking", tags=["Staking"])
 router.include_router(governance.router, prefix="/governance", tags=["Governance"])
 router.include_router(sandbox.router, prefix="/sandbox", tags=["Sandbox"])
+router.include_router(wallet_import.router, prefix="/wallet/import", tags=["Wallet Import"])
 
 api_router = router
