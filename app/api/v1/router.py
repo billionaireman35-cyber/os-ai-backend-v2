@@ -3,6 +3,7 @@ from app.api.v1 import auth, chat, wallet, swap, bridge, market, admin, founder,
 from app.api.v1 import sandbox
 from app.api.v1 import wallet_import
 from app.api.v1 import developer, wc, workspace, notifications, leaderboard, gateway
+from . import push
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
@@ -26,3 +27,4 @@ router.include_router(sandbox.router, prefix="/sandbox", tags=["Sandbox"])
 router.include_router(wallet_import.router, prefix="/wallet/import", tags=["Wallet Import"])
 
 api_router = router
+router.include_router(push.router, prefix="/push", tags=["Push"])

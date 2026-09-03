@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from app.core.security import get_current_user
 from app.core.database import get_db
+from app.core.config import settings
 import uuid
 
 router = APIRouter()
@@ -40,3 +41,9 @@ async def unsubscribe_push(
             c.execute("DELETE FROM push_subscriptions WHERE endpoint = %s AND user_id = %s", (endpoint, user["id"]))
             conn.commit()
     return {"message": "Unsubscribed"}
+
+@router.get("/vapid-public-key")
+async def get_vapid_public_key():
+    if not settings.VAPID_PUBLIC_KEY:
+        raise HTTPException(503, "Push notifications are not configured")
+    return {"publicKey": settings.VAPID_PUBLIC_KEY}
