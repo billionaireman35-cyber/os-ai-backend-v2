@@ -14,6 +14,7 @@ from app.tasks.burn_worker import process_burn_task
 from app.services.blockchain import burn_close, get_effective_burn_amount
 from app.core.config import settings
 import uuid, logging, json, traceback
+import asyncio
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,6 +25,26 @@ logger = logging.getLogger(__name__)
 # burn_close(). See staking_treasury_funding table / founder-suite sweep
 # endpoint for the other half of this mechanism.
 STAKING_FUNDING_SPLIT = 0.15
+
+# Holds strong references to detached streaming tasks so they aren't
+# garbage-collected mid-run (asyncio only weakly tracks scheduled tasks) -
+# see chat_stream()'s use of _drain_to_queue below. Entries remove
+# themselves via add_done_callback once finished.
+_background_tasks = set()
+
+
+async def _drain_to_queue(gen, queue):
+    """Fully consumes an async generator into a queue, independent of
+    whether anything is still reading that queue. This is what lets a
+    chat response keep generating (and its finally block still run -
+    burning CLOSE, saving the message) even if the client disconnects
+    mid-stream, since this coroutine is scheduled as its own asyncio
+    Task rather than being awaited directly by the HTTP response."""
+    try:
+        async for item in gen:
+            await queue.put(item)
+    finally:
+        await queue.put(None)  # sentinel: generation finished
 
 
 def burn_with_staking_split(effective_burn: int, chat_message_id: str, conn_cursor) -> str:
@@ -553,7 +574,24 @@ async def chat_stream(
 
                 yield "data: [DONE]\n\n"
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+        queue = asyncio.Queue()
+        task = asyncio.create_task(_drain_to_queue(generate(), queue))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+        async def relay():
+            # Reads whatever _drain_to_queue has produced so far and
+            # forwards it to the client. If the client disconnects,
+            # Starlette simply stops calling this - it does NOT cancel
+            # `task`, which keeps draining generate() to completion on
+            # its own regardless.
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+
+        return StreamingResponse(relay(), media_type="text/event-stream")
     except Exception as e:
         error_detail = str(e) + "\n" + traceback.format_exc()
         logger.error(f"Unhandled exception in chat_stream: {error_detail}")
