@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from app.core.security import get_current_user
 from app.core.database import get_db
+from app.core.config import settings
 from app.services.workspace_payment_service import verify_workspace_payment, get_unresolved_payment, link_payment_to_workspace
-import uuid, logging
+from app.services.ai import call_ai_model, build_system_prompt, search_web
+from app.services.memory import get_memories
+from app.services.blockchain import get_effective_burn_amount
+import uuid, logging, re, traceback
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -423,18 +427,129 @@ async def get_workspace_messages(
                 LIMIT %s
             """, (workspace_id, limit))
             rows = c.fetchall()
+
+            # Batched name lookup instead of one query per message - also
+            # naturally excludes NULL (AI-authored) user_ids from the IN
+            # clause, so those fall through to the is_ai branch below
+            # rather than a failed per-row lookup that used to read as
+            # "Unknown".
+            user_ids = {row[1] for row in rows if row[1] is not None}
+            names_by_id = {}
+            if user_ids:
+                c.execute("SELECT id, name FROM users WHERE id = ANY(%s)", (list(user_ids),))
+                names_by_id = {r[0]: r[1] for r in c.fetchall()}
+
             messages = []
             for row in rows:
-                c.execute("SELECT name FROM users WHERE id = %s", (row[1],))
-                user_row = c.fetchone()
+                is_ai_msg = row[3]
+                if is_ai_msg:
+                    display_name = "OS AI"
+                else:
+                    display_name = names_by_id.get(row[1], "Unknown")
                 messages.append({
                     "id": row[0], "user_id": row[1],
-                    "user_name": user_row[0] if user_row else "Unknown",
+                    "user_name": display_name,
                     "content": row[2], "is_ai": row[3],
                     "created_at": row[4].isoformat() if row[4] else None,
                     "edited_at": row[5].isoformat() if row[5] else None,
                 })
             return messages
+
+
+OSAI_MENTION_RE = re.compile(r"@osai\b", re.IGNORECASE)
+
+
+def _reply_as_osai(workspace_id: str, user: dict, question: str) -> dict | None:
+    """
+    Mirrors chat.py's non-streaming request handler exactly: atomic
+    balance check + deduct, call_ai_model, then burn-or-refund on
+    completion - same cost (BURN_PER_MESSAGE, tier-adjusted), same
+    memory/web-search context, charged to the asker. Posts the reply as
+    a real workspace_messages row (is_ai=TRUE, user_id=NULL - the column
+    allows NULL) visible to the whole hub, not just the asker.
+
+    Returns the AI message dict to include in the response, or None if
+    the asker had insufficient balance (silently skipped rather than
+    blocking their own message from sending - see call site).
+    """
+    from app.api.v1.chat import burn_with_staking_split
+
+    user_id = user["id"]
+    wallet_address = user.get("wallet_address")
+    effective_burn = get_effective_burn_amount(wallet_address, settings.BURN_PER_MESSAGE)
+    burn_tx_id = str(uuid.uuid4())
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE users SET close_balance = close_balance - %s WHERE id = %s AND close_balance >= %s",
+                (effective_burn, user_id, effective_burn)
+            )
+            if c.rowcount == 0:
+                return None
+            c.execute("""
+                INSERT INTO close_transactions (id, user_id, type, amount, status)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (burn_tx_id, user_id, "burn", effective_burn, "pending"))
+            conn.commit()
+
+    memory_context = ""
+    try:
+        memory_context = get_memories(user_id, question, settings.MEMORY_RETRIEVAL_LIMIT)
+    except Exception as e:
+        logger.error(f"Memory retrieval failed (hub @osai): {e}")
+
+    web_results = ""
+    if any(kw in question.lower() for kw in [
+        "latest", "today", "news", "current", "recent", "now", "who is",
+        "who's", "president", "prime minister", "ceo", "governor", "election",
+        "price of", "exchange rate", "stock price", "score", "won", "winner",
+        "this year", "this week", "right now", "still", "update", "happened"
+    ]):
+        try:
+            web_results = search_web(question)
+        except Exception as e:
+            logger.error(f"Web search failed (hub @osai): {e}")
+
+    system_prompt = build_system_prompt(question, user, memory_context, web_results)
+    messages_for_ai = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
+
+    ai_success = False
+    response_text = ""
+    try:
+        response_text, model_used = call_ai_model(messages_for_ai, user_id, None, tier=user.get("stake_tier", "guest"))
+        ai_success = True
+    except Exception as e:
+        logger.error(f"AI call failed (hub @osai): {e}\n{traceback.format_exc()}")
+        response_text = "I'm sorry, I encountered an error. Please try again later."
+
+    msg_id = str(uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as c:
+            if ai_success:
+                c.execute("""
+                    INSERT INTO workspace_messages (id, workspace_id, user_id, content, is_ai)
+                    VALUES (%s, %s, %s, %s, TRUE)
+                """, (msg_id, workspace_id, None, response_text))
+                try:
+                    tx_hash = burn_with_staking_split(effective_burn, msg_id, c)
+                    c.execute(
+                        "UPDATE close_transactions SET status = 'completed', tx_hash = %s WHERE id = %s",
+                        (tx_hash, burn_tx_id)
+                    )
+                except Exception as e:
+                    logger.error(f"On-chain burn failed (hub @osai): {e}")
+                    c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
+                    c.execute(
+                        "UPDATE close_transactions SET status = 'failed', tx_hash = 'burn_error' WHERE id = %s",
+                        (burn_tx_id,)
+                    )
+            else:
+                c.execute("UPDATE users SET close_balance = close_balance + %s WHERE id = %s", (effective_burn, user_id))
+                c.execute("UPDATE close_transactions SET status = 'failed' WHERE id = %s", (burn_tx_id,))
+            conn.commit()
+
+    return {"id": msg_id, "content": response_text, "user_id": None, "user_name": "OS AI", "is_ai": True}
 
 
 @router.post("/{workspace_id}/message")
@@ -459,7 +574,17 @@ async def send_workspace_message(
                 VALUES (%s, %s, %s, %s)
             """, (msg_id, workspace_id, user["id"], content))
             conn.commit()
-    return {"id": msg_id, "content": content, "user_id": user["id"], "user_name": user.get("name", "User")}
+
+    result = {"id": msg_id, "content": content, "user_id": user["id"], "user_name": user.get("name", "User")}
+
+    if OSAI_MENTION_RE.search(content):
+        ai_message = _reply_as_osai(workspace_id, user, content)
+        if ai_message:
+            result = {"message": result, "ai_message": ai_message}
+        else:
+            result = {"message": result, "ai_message": None, "ai_error": "Insufficient CLOSE balance to ask OS AI."}
+
+    return result
 
 
 @router.put("/{workspace_id}/message/{message_id}")
