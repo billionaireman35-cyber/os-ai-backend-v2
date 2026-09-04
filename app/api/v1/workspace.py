@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from pydantic import BaseModel
 from app.core.security import get_current_user
 from app.core.database import get_db
 from app.core.config import settings
@@ -147,11 +148,16 @@ async def discover_public_workspaces(
             ]
 
 
+class JoinRequest(BaseModel):
+    room_code: str
+
+
 @router.post("/join")
 async def join_workspace(
-    room_code: str = Body(...),
+    body: JoinRequest,
     user=Depends(get_current_user)
 ):
+    room_code = body.room_code
     """Free join REQUEST - no payment yet. Payment happens via
     /requests/submit-payment (self-service) after this."""
     if not user:

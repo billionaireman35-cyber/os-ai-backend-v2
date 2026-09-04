@@ -35,3 +35,4 @@ python-multipart
 eth-account==0.5.9
 mnemonic
 bip32utils
+pywebpush

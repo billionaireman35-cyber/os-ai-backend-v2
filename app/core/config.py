@@ -78,6 +78,9 @@ class Settings(BaseSettings):
 
     GOOGLE_CLIENT_ID: str = ""
 
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+
     def get_rpc_url(self, chain: str) -> str:
         """Primary RPC URL for a chain - prefers Alchemy if configured,
         falls back to the plain public endpoint otherwise. See

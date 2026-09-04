@@ -5,3 +5,4 @@
 __pycache__/
 app_backup/
 contracts/node_modules/
+.patches
