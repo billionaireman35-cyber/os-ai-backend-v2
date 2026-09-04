@@ -280,7 +280,7 @@ async def update_profile(req: dict, user=Depends(get_current_user)):
         with conn.cursor() as c:
             c.execute("UPDATE users SET name = %s, updated_at = NOW() WHERE id = %s", (name, user["id"]))
             conn.commit()
-            c.execute("SELECT id, email, name, close_balance, close_staked, stake_tier, wallet_address, is_founder FROM users WHERE id = %s", (user["id"],))
+            c.execute("SELECT id, email, name, close_balance, close_staked, stake_tier, wallet_address, is_founder, profile_picture FROM users WHERE id = %s", (user["id"],))
             row = c.fetchone()
             updated_user = {
                 "id": row[0],
@@ -291,6 +291,7 @@ async def update_profile(req: dict, user=Depends(get_current_user)):
                 "stake_tier": row[5] or "none",
                 "wallet_address": row[6] or "",
                 "is_founder": row[7] or False,
+                "profile_picture": row[8] or None,
             }
             return {"user": updated_user}
 
