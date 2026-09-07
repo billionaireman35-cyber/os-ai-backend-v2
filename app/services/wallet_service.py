@@ -32,14 +32,30 @@ def _encrypt_private_key(private_key_hex: str, password: str) -> str:
     return base64.b64encode(encrypted_payload).decode()
 
 def _decrypt_private_key(encrypted_b64: str, password: str) -> str:
+    if not encrypted_b64:
+        raise ValueError("_decrypt_private_key: encrypted_b64 is empty/None")
+    if not password:
+        raise ValueError("_decrypt_private_key: password is empty/None")
+
     raw = base64.b64decode(encrypted_b64)
+    logger.info(f"_decrypt_private_key: decoded {len(raw)} bytes from base64 (need >= 44)")
+    if len(raw) < 44:
+        raise ValueError(f"_decrypt_private_key: encrypted blob too short ({len(raw)} bytes, need >= 44) - encrypted_b64 may be truncated/wrong")
+
     salt = raw[:16]
     nonce = raw[16:28]
     tag = raw[28:44]
     ciphertext = raw[44:]
+    logger.info(f"_decrypt_private_key: salt={len(salt)}b nonce={len(nonce)}b tag={len(tag)}b ciphertext={len(ciphertext)}b")
+
     key = _derive_key(password, salt)
     cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    try:
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    except Exception as e:
+        logger.error(f"_decrypt_private_key: decrypt_and_verify failed: {type(e).__name__}: {e}")
+        raise ValueError(f"Decryption failed (wrong password or corrupted key): {type(e).__name__}")
+
     private_key_hex = plaintext.decode()
     if len(private_key_hex) != 64:
         raise ValueError(f"Invalid private key length: {len(private_key_hex)} (expected 64)")
