@@ -357,13 +357,25 @@ def send_close_from_wallet(from_address: str, from_private_key: str, to_address:
     lock = get_wallet_lock(from_address)
     with lock:
         nonce = web3.eth.get_transaction_count(from_address, 'pending')
+        logger.info(f"send_close_from_wallet: from={from_address} nonce={nonce!r} (type={type(nonce).__name__}) amount_wei={amount_wei}")
+        if nonce is None:
+            raise ValueError(f"get_transaction_count returned None for {from_address} - RPC issue")
+
         gas_estimate = contract.functions.transfer(to_address, amount_wei).estimate_gas({'from': from_address})
         gas_limit = int(gas_estimate * 1.2)
+        gas_price = web3.eth.gas_price
+        logger.info(f"send_close_from_wallet: gas_limit={gas_limit!r} gas_price={gas_price!r}")
+
         tx = contract.functions.transfer(to_address, amount_wei).build_transaction({
             'from': from_address,
             'nonce': nonce,
             'gas': gas_limit,
-            'gasPrice': web3.eth.gas_price,
+            'gasPrice': gas_price,
             'chainId': 137
         })
+        logger.info(f"send_close_from_wallet: built tx keys={list(tx.keys())} nonce_in_tx={tx.get('nonce')!r}")
+
+        if not from_private_key:
+            raise ValueError("from_private_key is empty/None - cannot sign transaction")
+
         return send_raw_tx(web3, from_private_key, tx)
