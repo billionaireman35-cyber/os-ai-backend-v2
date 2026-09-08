@@ -392,6 +392,34 @@ def send_transaction(
             conn.commit()
     return tx_hash
 
+def send_sponsored_transaction(user_id: str, password: str, to_address: str, amount: float) -> dict:
+    """CLOSE-only sponsored send: the relayer pays gas, recouping cost via
+    a flat CLOSE fee (see gas_sponsor.py). Bootstraps the wallet (one-time
+    POL drip + CLOSE approval, needs the password to sign that approval)
+    if it hasn't been already - subsequent calls for an already-bootstrapped
+    wallet don't need to touch the user's key at all, since the relayer
+    signs the actual transfer via the pre-approved allowance.
+
+    Only ever call this for CLOSE - the sponsorship mechanism (flat CLOSE
+    fee, CLOSE allowance) doesn't generalize to other tokens or chains.
+    """
+    from app.services.gas_sponsor import ensure_bootstrapped, sponsored_close_send, _is_bootstrapped
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            row = c.fetchone()
+            if not row or not row[0]:
+                raise ValueError("No wallet address found")
+            user_address = row[0]
+
+    if not _is_bootstrapped(user_id):
+        user_private_key = get_user_private_key(user_id, password, None)
+        ensure_bootstrapped(user_id, user_address, user_private_key)
+
+    return sponsored_close_send(user_id, user_address, to_address, amount)
+
+
 def sign_and_broadcast_swap(
     user_id: str,
     password: str,
