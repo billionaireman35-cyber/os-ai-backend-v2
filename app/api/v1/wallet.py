@@ -415,38 +415,6 @@ async def send(
         logger.error(f"Send failed: {e}")
         raise HTTPException(500, f"Send failed: {str(e)}")
 
-@router.post("/send-sponsored")
-async def send_sponsored(
-    to_address: str = Body(...),
-    amount: float = Body(...),
-    password: str = Body(...),
-    user=Depends(get_current_user)
-):
-    """CLOSE-only sponsored send: relayer pays gas, user pays a flat CLOSE
-    fee instead of needing their own POL. Password is only actually used
-    the first time (one-time wallet bootstrap/approval) - required on
-    every call for simplicity, but a no-op for an already-bootstrapped
-    wallet."""
-    if not user:
-        raise HTTPException(401, "Authentication required")
-    if len(password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters")
-    try:
-        from app.services.wallet_service import send_sponsored_transaction
-        from app.services.gas_sponsor import SponsorshipError
-        result = send_sponsored_transaction(
-            user_id=user["id"],
-            password=password,
-            to_address=to_address,
-            amount=amount,
-        )
-        return result
-    except (ValueError, SponsorshipError) as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        logger.error(f"Sponsored send failed: {e}")
-        raise HTTPException(500, f"Sponsored send failed: {str(e)}")
-
 @router.post("/sign")
 async def sign(
     chain: str = Body(...),
