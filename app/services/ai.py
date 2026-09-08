@@ -427,6 +427,24 @@ MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 # ------------------------------------------------------------------------------
 # CORE AI CALL (NON‑STREAMING)
 # ------------------------------------------------------------------------------
+async def call_ai_intelligence(messages: list, model: str = "claude-sonnet-4-6") -> tuple:
+    if not settings.ANTHROPIC_API_KEY:
+        return call_ai_model(messages, tier="guest")
+    try:
+        system = next((m["content"] for m in messages if m.get("role") == "system"), None)
+        msgs = [m for m in messages if m.get("role") != "system"]
+        payload = {"model": model, "max_tokens": 4096, "messages": msgs}
+        if system: payload["system"] = system
+        async with httpx.AsyncClient(timeout=90) as client:
+            r = await client.post("https://api.anthropic.com/v1/messages", headers={"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}, json=payload)
+            r.raise_for_status()
+            data = r.json()
+            text = "".join(x.get("text", "") for x in data.get("content", []) if x.get("type") == "text")
+            return text, f"{model} (Anthropic)"
+    except Exception as e:
+        logger.error(f"Intelligence Anthropic error: {e}")
+        return call_ai_model(messages, tier="guest")
+
 def call_ai_model(messages: list, user_id: str = None, model: str = None, tier: str = "guest") -> tuple:
     allowed_models = TIER_MODEL_ACCESS.get(tier, TIER_MODEL_ACCESS["guest"])
     default_model = DEFAULT_MODELS.get(tier, DEFAULT_MODELS["guest"])

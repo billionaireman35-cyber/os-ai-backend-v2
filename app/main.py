@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.api.v2.intelligence import router as intelligence_router
 import app.patch  # Apply ForwardRef patch before any other imports
 
 from fastapi import FastAPI
@@ -37,3 +38,4 @@ async def health():
         "environment": settings.ENVIRONMENT,
         "chains": settings.SUPPORTED_CHAINS,
     }
+app.include_router(intelligence_router, prefix='/api/v2')
