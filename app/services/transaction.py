@@ -153,6 +153,50 @@ def _recover_public_key_from_signature(msg_hash: bytes, r: int, s: int, recid: i
     vk = VerifyingKey.from_string(pubkey_bytes, curve=SECP256k1)
     return vk
 
+def sign_safe_hash(safe_tx_hash_hex: str, private_key_hex: str, expected_address: str) -> str:
+    """Signs a Safe transaction hash (already computed on-chain via the
+    Safe contract's own getTransactionHash) and returns a 65-byte Safe-
+    formatted signature: r(32) + s(32) + v(1), hex-encoded.
+
+    Deliberately distinct from sign_transaction: Safe signatures are raw
+    hash signatures with v in {27, 28} (the original Bitcoin/early-Ethereum
+    convention), not RLP-encoded transactions with EIP-155 chain-id-encoded
+    v - reusing sign_transaction here would produce a signature Safe's
+    contract-level signature verification would reject.
+
+    Reuses the same low-level ECDSA + recovery-ID-search primitives as
+    sign_transaction, since that logic is already correct and tested."""
+    msg_hash = hex_to_bytes(safe_tx_hash_hex)
+    if len(msg_hash) != 32:
+        raise ValueError(f"Expected a 32-byte hash, got {len(msg_hash)} bytes")
+
+    sk = SigningKey.from_string(bytes.fromhex(private_key_hex), curve=SECP256k1)
+    signature_der = sk.sign_digest_deterministic(msg_hash, hashfunc=hashlib.sha256, sigencode=sigencode_der)
+    r, s = sigdecode_der(signature_der, 0)
+
+    if s > SECP256K1_HALF_N:
+        s = SECP256K1_N - s
+
+    recid = None
+    for candidate_recid in (0, 1):
+        try:
+            vk = _recover_public_key_from_signature(msg_hash, r, s, candidate_recid)
+            pubkey_bytes = vk.to_string()
+            addr_hash = _keccak256(pubkey_bytes)
+            recovered_address = "0x" + addr_hash[-20:].hex()
+            if recovered_address.lower() == expected_address.lower():
+                recid = candidate_recid
+                break
+        except Exception:
+            continue
+    if recid is None:
+        raise ValueError("Could not derive a valid recovery ID matching the expected address")
+
+    v = 27 + recid
+    sig_bytes = r.to_bytes(32, 'big') + s.to_bytes(32, 'big') + bytes([v])
+    return "0x" + sig_bytes.hex()
+
+
 def sign_transaction(
     chain: str,
     from_address: str,

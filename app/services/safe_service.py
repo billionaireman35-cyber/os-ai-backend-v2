@@ -18,7 +18,7 @@ from eth_utils import to_checksum_address
 from app.core.database import get_db
 from app.core.config import settings, get_safe_singleton, get_safe_proxy_factory
 from app.services.blockchain import get_web3
-from app.services.transaction import sign_transaction, broadcast_transaction
+from app.services.transaction import sign_transaction, broadcast_transaction, sign_safe_hash
 from app.services.wallet_service import get_user_private_key
 
 logger = logging.getLogger(__name__)
@@ -287,6 +287,308 @@ def find_owner_wallet(owner_address: str) -> dict | None:
             if not row:
                 return None
             return {"user_id": row[0], "wallet_type": row[1] or "custodial"}
+
+
+def propose_safe_transaction(
+    safe_id: str,
+    user_id: str,
+    password: str,
+    to_address: str,
+    value_wei: int,
+    data: str = "0x",
+) -> dict:
+    """Proposes a withdrawal/transfer from a Safe: computes the exact
+    on-chain transaction hash via the Safe's own getTransactionHash (so
+    our hash always matches what execTransaction will later verify),
+    signs it with the proposer's own key, and stores it as the first
+    signature. Only works if the proposer is both an owner of this Safe
+    AND an OS AI user with a custodial (password-signable) wallet -
+    connected-wallet owners must sign via their own external wallet
+    (not yet implemented) and non-owners are rejected outright."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT chain, address, owners, threshold FROM safes WHERE id = %s", (safe_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Safe not found")
+            chain, safe_address, owners, threshold = row[0], row[1], row[2], row[3]
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            urow = c.fetchone()
+            proposer_address = urow[0] if urow else None
+
+    if not proposer_address or proposer_address.lower() not in [o.lower() for o in owners]:
+        raise ValueError("Only an owner of this Safe can propose a transaction")
+
+    owner_info = find_owner_wallet(proposer_address)
+    if not owner_info or owner_info["user_id"] != user_id:
+        raise ValueError("Unable to verify wallet ownership")
+    if owner_info["wallet_type"] != "custodial":
+        raise ValueError("This wallet is connected (not custodial) - in-app signing for connected wallets is not yet supported")
+
+    private_key_hex = get_user_private_key(user_id, password)
+
+    web3 = get_web3(chain)
+    safe_contract = web3.eth.contract(address=to_checksum_address(safe_address), abi=SAFE_CONTRACT_ABI)
+
+    safe_nonce = safe_contract.functions.nonce().call()
+
+    ZERO = "0x0000000000000000000000000000000000000000"
+    data_bytes = bytes.fromhex(data[2:]) if data.startswith("0x") else bytes.fromhex(data)
+
+    safe_tx_hash = safe_contract.functions.getTransactionHash(
+        to_checksum_address(to_address),
+        value_wei,
+        data_bytes,
+        0,  # operation: 0 = Call (the only kind this app initiates)
+        0,  # safeTxGas: 0 = no manual gas limit override, let execTransaction estimate
+        0,  # baseGas
+        0,  # gasPrice: 0 = no refund/relayer mechanism - proposer/executor pays their own gas
+        ZERO,  # gasToken
+        ZERO,  # refundReceiver
+        safe_nonce,
+    ).call()
+
+    safe_tx_hash_hex = "0x" + safe_tx_hash.hex()
+    signature_hex = sign_safe_hash(safe_tx_hash_hex, private_key_hex, proposer_address)
+
+    tx_id = str(uuid.uuid4())
+    import json
+    signatures = [{"owner": proposer_address, "signature": signature_hex}]
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                INSERT INTO safe_transactions
+                    (id, safe_id, proposer_user_id, to_address, value_wei, data, safe_nonce, safe_tx_hash, signatures, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+            """, (tx_id, safe_id, user_id, to_address, str(value_wei), data, safe_nonce, safe_tx_hash_hex, json.dumps(signatures)))
+            conn.commit()
+
+    return {
+        "id": tx_id,
+        "safe_id": safe_id,
+        "to_address": to_address,
+        "value_wei": str(value_wei),
+        "safe_nonce": safe_nonce,
+        "safe_tx_hash": safe_tx_hash_hex,
+        "signatures_collected": 1,
+        "threshold": threshold,
+        "status": "pending",
+    }
+
+
+def sign_safe_transaction(tx_id: str, user_id: str, password: str) -> dict:
+    """Adds one more owner's signature to an existing pending proposal.
+    Recomputes the same safe_tx_hash from the stored proposal (rather than
+    trusting a client-supplied hash) and verifies the caller is genuinely
+    an owner of the Safe before signing - a user can only sign with their
+    own key regardless, but this also gives a clear error rather than a
+    wasted signature from a non-owner."""
+    import json
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT st.safe_id, st.safe_tx_hash, st.signatures, st.status,
+                       s.owners, s.threshold, s.chain, s.address
+                FROM safe_transactions st
+                JOIN safes s ON s.id = st.safe_id
+                WHERE st.id = %s
+            """, (tx_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Proposal not found")
+            safe_id, safe_tx_hash_hex, signatures, status, owners, threshold, chain, safe_address = row
+
+    if status != "pending":
+        raise ValueError(f"This proposal is already {status}")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            urow = c.fetchone()
+            signer_address = urow[0] if urow else None
+
+    if not signer_address or signer_address.lower() not in [o.lower() for o in owners]:
+        raise ValueError("Only an owner of this Safe can sign this proposal")
+
+    if any(sig["owner"].lower() == signer_address.lower() for sig in signatures):
+        raise ValueError("You have already signed this proposal")
+
+    owner_info = find_owner_wallet(signer_address)
+    if not owner_info or owner_info["user_id"] != user_id:
+        raise ValueError("Unable to verify wallet ownership")
+    if owner_info["wallet_type"] != "custodial":
+        raise ValueError("This wallet is connected (not custodial) - in-app signing for connected wallets is not yet supported")
+
+    private_key_hex = get_user_private_key(user_id, password)
+    signature_hex = sign_safe_hash(safe_tx_hash_hex, private_key_hex, signer_address)
+
+    signatures.append({"owner": signer_address, "signature": signature_hex})
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE safe_transactions SET signatures = %s WHERE id = %s",
+                (json.dumps(signatures), tx_id)
+            )
+            conn.commit()
+
+    return {
+        "id": tx_id,
+        "safe_id": safe_id,
+        "signatures_collected": len(signatures),
+        "threshold": threshold,
+        "ready_to_execute": len(signatures) >= threshold,
+        "status": "pending",
+    }
+
+
+def execute_safe_transaction(tx_id: str, user_id: str, password: str) -> dict:
+    """Executes a Safe transaction once enough signatures are collected.
+    Any owner can trigger execution (they pay the gas for this call) -
+    Safe's contract itself verifies the collected signatures meet
+    threshold, so this app's own count check is a fast-fail convenience,
+    not the actual security boundary.
+
+    Signatures must be concatenated in ascending order by signer address -
+    this is a real Safe contract requirement (its signature-checking loop
+    assumes ascending order to detect duplicates/enforce distinctness),
+    not just a formatting preference."""
+    import json
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT st.to_address, st.value_wei, st.data, st.safe_nonce,
+                       st.signatures, st.status,
+                       s.chain, s.address, s.threshold, s.owners
+                FROM safe_transactions st
+                JOIN safes s ON s.id = st.safe_id
+                WHERE st.id = %s
+            """, (tx_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Proposal not found")
+            (to_address, value_wei_str, data, safe_nonce, signatures, status,
+             chain, safe_address, threshold, owners) = row
+
+    if status != "pending":
+        raise ValueError(f"This proposal is already {status}")
+    if len(signatures) < threshold:
+        raise ValueError(f"Not enough signatures yet ({len(signatures)}/{threshold})")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            urow = c.fetchone()
+            executor_address = urow[0] if urow else None
+
+    if not executor_address or executor_address.lower() not in [o.lower() for o in owners]:
+        raise ValueError("Only an owner of this Safe can execute this proposal")
+
+    owner_info = find_owner_wallet(executor_address)
+    if not owner_info or owner_info["user_id"] != user_id:
+        raise ValueError("Unable to verify wallet ownership")
+    if owner_info["wallet_type"] != "custodial":
+        raise ValueError("This wallet is connected (not custodial) - in-app signing for connected wallets is not yet supported")
+
+    private_key_hex = get_user_private_key(user_id, password)
+
+    # Concatenate signatures sorted ascending by owner address (required by
+    # the Safe contract's own verification order, not a stylistic choice).
+    sorted_sigs = sorted(signatures, key=lambda s: s["owner"].lower())
+    packed_signatures = "0x" + "".join(sig["signature"][2:] for sig in sorted_sigs)
+
+    web3 = get_web3(chain)
+    safe_contract = web3.eth.contract(address=to_checksum_address(safe_address), abi=SAFE_CONTRACT_ABI)
+
+    ZERO = "0x0000000000000000000000000000000000000000"
+    data_bytes = bytes.fromhex(data[2:]) if data.startswith("0x") else bytes.fromhex(data)
+    value_wei = int(value_wei_str)
+
+    exec_calldata = safe_contract.encodeABI(fn_name="execTransaction", args=[
+        to_checksum_address(to_address),
+        value_wei,
+        data_bytes,
+        0,
+        0,
+        0,
+        0,
+        ZERO,
+        ZERO,
+        bytes.fromhex(packed_signatures[2:]),
+    ])
+
+    signed_hex = sign_transaction(
+        chain=chain,
+        from_address=executor_address,
+        to_address=safe_address,
+        value_wei=0,
+        private_key_hex=private_key_hex,
+        data=exec_calldata,
+    )
+    exec_tx_hash = broadcast_transaction(chain, signed_hex)
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE safe_transactions
+                SET status = 'executed', exec_tx_hash = %s, executed_at = NOW()
+                WHERE id = %s
+            """, (exec_tx_hash, tx_id))
+            conn.commit()
+
+    return {
+        "id": tx_id,
+        "status": "executed",
+        "exec_tx_hash": exec_tx_hash,
+    }
+
+
+def list_pending_transactions(safe_id: str, user_id: str) -> list:
+    """Lists pending proposals for a Safe, for display to any of its
+    owners. Scoped by checking the requester is genuinely an owner
+    (not just any OS AI user), since proposal details (destination,
+    amount) shouldn't be visible to non-owners."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT owners, threshold FROM safes WHERE id = %s", (safe_id,))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Safe not found")
+            owners, threshold = row[0], row[1]
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
+            urow = c.fetchone()
+            requester_address = urow[0] if urow else None
+
+    if not requester_address or requester_address.lower() not in [o.lower() for o in owners]:
+        raise ValueError("Only an owner of this Safe can view its proposals")
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, to_address, value_wei, data, safe_nonce, signatures, status, exec_tx_hash, created_at
+                FROM safe_transactions
+                WHERE safe_id = %s
+                ORDER BY created_at DESC
+            """, (safe_id,))
+            rows = c.fetchall()
+            return [
+                {
+                    "id": r[0], "to_address": r[1], "value_wei": r[2], "data": r[3],
+                    "safe_nonce": r[4], "signatures_collected": len(r[5]),
+                    "signers": [s["owner"] for s in r[5]], "threshold": threshold,
+                    "status": r[6], "exec_tx_hash": r[7],
+                    "created_at": r[8].isoformat() if r[8] else None,
+                }
+                for r in rows
+            ]
 
 
 def get_safe_balance(safe_id: str, user_id: str) -> dict:
