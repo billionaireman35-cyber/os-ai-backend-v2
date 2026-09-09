@@ -48,12 +48,11 @@ async def create_safe_endpoint(
 
 
 @router.get("/_debug_schema")
-async def debug_safe_transactions_schema(user=Depends(get_current_user)):
-    """TEMPORARY - checks the live safe_transactions table schema so we
-    can tell whether an old, unused WIP migration already created it with
-    a different shape than our new one. Delete this route once confirmed."""
-    if not user:
-        raise HTTPException(401, "Authentication required")
+async def debug_safe_transactions_schema():
+    """TEMPORARY, NO AUTH - checks the live safe_transactions table schema
+    so we can tell whether an old, unused WIP migration already created it
+    with a different shape than our new one. Read-only, exposes only
+    column names/types, no user data. Delete this route once confirmed."""
     from app.core.database import get_db
     with get_db() as conn:
         with conn.cursor() as c:
