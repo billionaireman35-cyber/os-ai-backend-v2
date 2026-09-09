@@ -47,24 +47,6 @@ async def create_safe_endpoint(
         raise HTTPException(500, "Safe creation failed")
 
 
-@router.get("/_debug_schema")
-async def debug_safe_transactions_schema():
-    """TEMPORARY, NO AUTH - checks the live safe_transactions table schema
-    so we can tell whether an old, unused WIP migration already created it
-    with a different shape than our new one. Read-only, exposes only
-    column names/types, no user data. Delete this route once confirmed."""
-    from app.core.database import get_db
-    with get_db() as conn:
-        with conn.cursor() as c:
-            c.execute("""
-                SELECT column_name, data_type FROM information_schema.columns
-                WHERE table_name = 'safe_transactions'
-                ORDER BY ordinal_position
-            """)
-            rows = c.fetchall()
-            return {"columns": [{"name": r[0], "type": r[1]} for r in rows]}
-
-
 @router.get("/list")
 async def list_safes_endpoint(user=Depends(get_current_user)):
     if not user:
