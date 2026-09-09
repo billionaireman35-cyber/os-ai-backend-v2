@@ -50,16 +50,55 @@ def rlp_encode(obj):
         raise TypeError(f"Unsupported type for RLP: {type(obj)}")
 
 def _rpc_call(chain: str, method: str, params: list) -> dict:
-    rpc_url = settings.get_rpc_url(chain)
+    """
+    Tries each RPC URL from settings.get_rpc_urls() in order (Alchemy ->
+    Infura -> public fallback) until one returns a valid, non-error
+    response - mirrors get_web3()'s fallback logic in blockchain.py.
+    Added after a Safe deployment broadcast failed with a stale "balance
+    0" error from a single public RPC, despite the wallet holding real,
+    confirmed funds moments earlier via a different (fallback-aware)
+    code path.
+    """
+    urls = settings.get_rpc_urls(chain)
+    if not urls:
+        raise ValueError(f"No RPC URL configured for chain: {chain}")
+
     payload = {
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
         "id": 1
     }
-    response = requests.post(rpc_url, json=payload, timeout=10)
-    response.raise_for_status()
-    return response.json()
+
+    last_error = None
+    last_result = None
+    for url in urls:
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            # A JSON-RPC error in the response body (e.g. stale state,
+            # node-specific rejection) is not a network/HTTP failure, so
+            # requests won't raise for it - check explicitly and try the
+            # next RPC rather than trusting a single node's error.
+            if "error" in result:
+                logger.warning(f"RPC error from {url.split('/v')[0] if '/v' in url else url} for {method}: {result['error']}")
+                last_error = result["error"]
+                last_result = result
+                continue
+            return result
+        except Exception as e:
+            logger.warning(f"RPC call failed for {chain} ({url.split('/v')[0] if '/v' in url else url}), method={method}: {e}")
+            last_error = e
+            continue
+
+    # All RPCs failed or returned errors - return the last error response
+    # so existing error-handling (e.g. broadcast_transaction's
+    # result.get("result")) behaves the same as before, or raise if we
+    # never got any response at all.
+    if last_result is not None:
+        return last_result
+    raise ConnectionError(f"All RPC endpoints failed for chain {chain}, method={method}: {last_error}")
 
 def _get_nonce(chain: str, address: str) -> int:
     result = _rpc_call(chain, "eth_getTransactionCount", [address, "pending"])
