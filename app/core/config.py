@@ -135,12 +135,18 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# GnosisSafeL2 1.3.0 on L2/L2-like chains (Polygon, BSC, Arbitrum, Base) -
+# verified independently via each chain's own explorer (PolygonScan,
+# BscScan, Arbiscan, BaseScan all confirm the same address as
+# "GnosisSafeL2"/"Safe: Singleton L2 1.3.0"). Ethereum mainnet uses the
+# standard (non-L2) GnosisSafe singleton instead - mainnet doesn't need
+# the L2 variant's extra event-logging optimizations.
 SAFE_SINGLETON_ADDRESSES = {
     "polygon": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
     "ethereum": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
-    "bsc": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
-    "arbitrum": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
-    "base": "0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552",
+    "bsc": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
+    "arbitrum": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
+    "base": "0x3E5c63644E683549055b9Be8653de26E0B4CD36E",
 }
 
 SAFE_PROXY_FACTORY_ADDRESSES = {

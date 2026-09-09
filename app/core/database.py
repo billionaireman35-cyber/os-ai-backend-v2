@@ -416,6 +416,20 @@ def init_db():
                 c.execute("ALTER TABLE close_transactions ADD COLUMN IF NOT EXISTS wallet_address TEXT")
                 c.execute("ALTER TABLE os_wallets ADD COLUMN IF NOT EXISTS wallet_type TEXT DEFAULT 'custodial'")
                 c.execute("ALTER TABLE os_wallets ALTER COLUMN encrypted_key DROP NOT NULL")
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS safes (
+                        id UUID PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        chain TEXT NOT NULL,
+                        address TEXT NOT NULL,
+                        owners JSONB NOT NULL,
+                        threshold INTEGER NOT NULL,
+                        label TEXT DEFAULT 'Safe',
+                        tx_hash TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
                 c.execute("""
                     UPDATE close_transactions ct
                     SET wallet_address = u.wallet_address
