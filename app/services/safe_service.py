@@ -68,6 +68,72 @@ SAFE_PROXY_FACTORY_ABI = [
     }
 ]
 
+# Minimal ABI for interacting with a deployed Safe itself (distinct from
+# the factory/singleton ABIs above, which only cover deployment).
+# getTransactionHash matches Safe's own on-chain hash computation exactly
+# - calling it (a view function, no gas/signing needed) rather than
+# reimplementing Safe's EIP-712 hashing ourselves avoids any risk of a
+# hash mismatch between what we sign and what the contract verifies.
+SAFE_CONTRACT_ABI = [
+    {
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+            {"name": "operation", "type": "uint8"},
+            {"name": "safeTxGas", "type": "uint256"},
+            {"name": "baseGas", "type": "uint256"},
+            {"name": "gasPrice", "type": "uint256"},
+            {"name": "gasToken", "type": "address"},
+            {"name": "refundReceiver", "type": "address"},
+            {"name": "_nonce", "type": "uint256"}
+        ],
+        "name": "getTransactionHash",
+        "outputs": [{"name": "", "type": "bytes32"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "nonce",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"name": "to", "type": "address"},
+            {"name": "value", "type": "uint256"},
+            {"name": "data", "type": "bytes"},
+            {"name": "operation", "type": "uint8"},
+            {"name": "safeTxGas", "type": "uint256"},
+            {"name": "baseGas", "type": "uint256"},
+            {"name": "gasPrice", "type": "uint256"},
+            {"name": "gasToken", "type": "address"},
+            {"name": "refundReceiver", "type": "address"},
+            {"name": "signatures", "type": "bytes"}
+        ],
+        "name": "execTransaction",
+        "outputs": [{"name": "success", "type": "bool"}],
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "getOwners",
+        "outputs": [{"name": "", "type": "address[]"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "getThreshold",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
+
 
 def create_safe(
     user_id: str,
@@ -197,6 +263,30 @@ def list_safes(user_id: str) -> list:
                 }
                 for r in rows
             ]
+
+
+def find_owner_wallet(owner_address: str) -> dict | None:
+    """Looks up which OS AI user (if any) controls a given address, and
+    how it can be signed. Checks os_wallets, which is the source of truth
+    for every wallet in this app - including primary wallets, which also
+    have a row there (see get_user_private_key's primary-wallet query).
+
+    Returns None if the address matches no OS AI user at all (a genuinely
+    external owner - out of scope for in-app signing in this version).
+    Otherwise returns {"user_id", "wallet_type"} where wallet_type is
+    "custodial" (backend can sign with the owner's password) or
+    "connected" (only the owner's own external wallet, e.g. MetaMask via
+    WalletConnect, can sign - this app never held that key)."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT user_id, wallet_type FROM os_wallets WHERE LOWER(address) = LOWER(%s)",
+                (owner_address,)
+            )
+            row = c.fetchone()
+            if not row:
+                return None
+            return {"user_id": row[0], "wallet_type": row[1] or "custodial"}
 
 
 def get_safe_balance(safe_id: str, user_id: str) -> dict:
