@@ -152,7 +152,7 @@ def create_safe(
     tx_hash = broadcast_transaction(chain, signed_hex)
 
     receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
-    events = factory_contract.events.ProxyCreation().process_receipt(receipt)
+    events = factory_contract.events.ProxyCreation().processReceipt(receipt)
     if not events:
         raise ValueError(
             f"Safe deployment transaction ({tx_hash}) was mined but no ProxyCreation event was found. "
