@@ -137,6 +137,9 @@ def create_safe(
         salt_nonce,
     ])
 
+    debug_balance = web3.eth.get_balance(to_checksum_address(from_address))
+    logger.info(f"Safe deploy debug: from_address={from_address}, chain={chain}, balance_wei={debug_balance}")
+
     signed_hex = sign_transaction(
         chain=chain,
         from_address=from_address,
