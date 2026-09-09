@@ -338,25 +338,6 @@ def init_db():
                 """)
                 c.execute("CREATE INDEX IF NOT EXISTS idx_workspace_messages_workspace ON workspace_messages (workspace_id, created_at)")
 
-                c.execute("""
-                    CREATE TABLE IF NOT EXISTS safe_transactions (
-                        id UUID PRIMARY KEY,
-                        safe_address TEXT NOT NULL,
-                        chain TEXT DEFAULT 'polygon',
-                        to_address TEXT NOT NULL,
-                        value TEXT NOT NULL,
-                        data TEXT,
-                        safe_tx_hash TEXT NOT NULL,
-                        status TEXT DEFAULT 'pending',
-                        threshold INTEGER NOT NULL,
-                        signers JSONB DEFAULT '[]',
-                        signatures JSONB DEFAULT '[]',
-                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        executed_at TIMESTAMP
-                    )
-                """)
-                c.execute("CREATE INDEX IF NOT EXISTS idx_safe_transactions_safe_address ON safe_transactions (safe_address)")
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS api_keys (
@@ -428,6 +409,35 @@ def init_db():
                         label TEXT DEFAULT 'Safe',
                         tx_hash TEXT,
                         created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                # One-time fix: an earlier, abandoned WIP session created this
+                # table with a different, incompatible schema
+                # (safe_address/signers/threshold columns, no FK to safes).
+                # Confirmed via a temporary debug endpoint that it was never
+                # actually used (no real proposals were ever written), so
+                # dropping and recreating with the correct schema is safe.
+                # This DROP is intentionally left in place (not removed after
+                # first run) since IF EXISTS makes it a permanent no-op once
+                # the old table is gone - safe to run on every startup.
+                c.execute("DROP TABLE IF EXISTS safe_transactions")
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS safe_transactions (
+                        id UUID PRIMARY KEY,
+                        safe_id UUID REFERENCES safes(id) ON DELETE CASCADE,
+                        proposer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                        to_address TEXT NOT NULL,
+                        value_wei TEXT NOT NULL DEFAULT '0',
+                        data TEXT NOT NULL DEFAULT '0x',
+                        safe_nonce BIGINT NOT NULL,
+                        safe_tx_hash TEXT NOT NULL,
+                        signatures JSONB NOT NULL DEFAULT '[]',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        exec_tx_hash TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        executed_at TIMESTAMP
                     )
                 """)
                 c.execute("""
