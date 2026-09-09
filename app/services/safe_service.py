@@ -197,3 +197,50 @@ def list_safes(user_id: str) -> list:
                 }
                 for r in rows
             ]
+
+
+def get_safe_balance(safe_id: str, user_id: str) -> dict:
+    """Native + tracked-token balance for one Safe, on the single chain it
+    was actually deployed on (unlike get_all_balances, which checks every
+    supported chain - a Safe's address is meaningless on chains it was
+    never deployed to)."""
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT chain, address FROM safes WHERE id = %s AND user_id = %s
+            """, (safe_id, user_id))
+            row = c.fetchone()
+            if not row:
+                raise ValueError("Safe not found")
+            chain, address = row[0], row[1]
+
+    from app.services.blockchain import get_balance, get_token_balance
+
+    checksummed = to_checksum_address(address)
+    try:
+        native_bal = float(get_balance(chain, checksummed))
+    except Exception as e:
+        logger.error(f"get_balance failed for Safe {safe_id} ({chain}/{address}): {e}")
+        native_bal = 0.0
+
+    result = {
+        "chain": chain,
+        "address": address,
+        "native": {"symbol": "POL" if chain == "polygon" else chain.upper(), "balance": native_bal},
+        "tokens": {},
+    }
+
+    if chain == "polygon":
+        token_list = [
+            {"symbol": "CLOSE", "address": settings.CLOSE_CONTRACT_ADDRESS},
+            {"symbol": "USDC", "address": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"},
+        ]
+        for token in token_list:
+            try:
+                bal = get_token_balance(chain, token["address"], checksummed)
+                if bal > 0:
+                    result["tokens"][token["symbol"]] = {"address": token["address"], "balance": bal}
+            except Exception:
+                pass
+
+    return result

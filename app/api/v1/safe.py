@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from app.core.security import get_current_user
-from app.services.safe_service import create_safe, list_safes
+from app.services.safe_service import create_safe, list_safes, get_safe_balance
 import logging
 
 router = APIRouter()
@@ -56,3 +56,16 @@ async def list_safes_endpoint(user=Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Safe list error: {e}")
         raise HTTPException(500, "Failed to list safes")
+
+
+@router.get("/{safe_id}/balance")
+async def get_safe_balance_endpoint(safe_id: str, user=Depends(get_current_user)):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    try:
+        return get_safe_balance(safe_id, user["id"])
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        logger.error(f"Safe balance error: {e}")
+        raise HTTPException(500, "Failed to fetch Safe balance")
