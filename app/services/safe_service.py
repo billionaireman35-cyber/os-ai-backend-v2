@@ -88,6 +88,7 @@ def create_safe(
     rather than a locally-predicted CREATE2 address - this is the one
     on-chain action in this app that waits synchronously rather than
     returning a tx_hash immediately."""
+    print(f"SAFE_CREATE_ENTERED user_id={user_id} chain={chain} wallet_address_param={wallet_address}", flush=True)
     if chain not in settings.SUPPORTED_CHAINS:
         raise ValueError(f"Unsupported chain: {chain}")
     if not owners:
