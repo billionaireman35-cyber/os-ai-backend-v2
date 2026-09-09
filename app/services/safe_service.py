@@ -139,7 +139,7 @@ def create_safe(
     ])
 
     debug_balance = web3.eth.get_balance(to_checksum_address(from_address))
-    logger.info(f"Safe deploy debug: from_address={from_address}, chain={chain}, balance_wei={debug_balance}")
+    print(f"SAFE_DEPLOY_DEBUG from_address={from_address} chain={chain} balance_wei={debug_balance}", flush=True)
 
     signed_hex = sign_transaction(
         chain=chain,
