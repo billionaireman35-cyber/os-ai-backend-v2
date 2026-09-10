@@ -450,5 +450,69 @@ class WalletServiceSigningTests(unittest.TestCase):
         broadcast_mock.assert_called_once_with("polygon", "0xsigned")
 
 
+class WalletSignContractTests(unittest.TestCase):
+    def test_sign_requires_explicit_wallet_id(self):
+        from pathlib import Path
+
+        source = Path("app/api/v1/wallet.py").read_text()
+        start = source.index('@router.post("/sign")')
+        next_route = source.find('\n@router.', start + 1)
+        end = next_route if next_route != -1 else len(source)
+        sign_source = source[start:end]
+
+        self.assertIn(
+            'wallet_id: str = Body(..., description="Stable os_wallets ID for the wallet that should sign")',
+            sign_source,
+        )
+
+    def test_sign_never_queries_primary_wallet(self):
+        from pathlib import Path
+
+        source = Path("app/api/v1/wallet.py").read_text()
+        start = source.index('@router.post("/sign")')
+        next_route = source.find('\n@router.', start + 1)
+        end = next_route if next_route != -1 else len(source)
+        sign_source = source[start:end]
+
+        self.assertIn(
+            "require_signing_wallet(",
+            sign_source,
+        )
+        self.assertNotIn(
+            'SELECT wallet_address FROM users WHERE id = %s',
+            sign_source,
+        )
+        self.assertNotIn(
+            "from app.core.database import get_db",
+            sign_source,
+        )
+
+    def test_sign_uses_resolved_wallet_for_key_and_from_address(self):
+        from pathlib import Path
+
+        source = Path("app/api/v1/wallet.py").read_text()
+        start = source.index('@router.post("/sign")')
+        next_route = source.find('\n@router.', start + 1)
+        end = next_route if next_route != -1 else len(source)
+        sign_source = source[start:end]
+
+        self.assertIn(
+            'wallet_id=wallet_id',
+            sign_source,
+        )
+        self.assertIn(
+            'wallet_id=wallet["id"]',
+            sign_source,
+        )
+        self.assertIn(
+            'from_address=wallet["address"]',
+            sign_source,
+        )
+        self.assertNotIn(
+            "from_address=wallet_address",
+            sign_source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

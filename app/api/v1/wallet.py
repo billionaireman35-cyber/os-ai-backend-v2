@@ -422,7 +422,8 @@ async def sign(
     chain: str = Body(...),
     transaction: dict = Body(...),  # expects {to, value, data?, gas?, gasPrice?, nonce?}
     password: str = Body(...),
-    wallet_address: str = Body(None, description="Sign from a specific imported wallet instead of the primary wallet"),
+    wallet_id: str = Body(..., description="Stable os_wallets ID for the wallet that should sign"),
+    wallet_address: str = Body(None, description="Optional wallet address verification field"),
     user=Depends(get_current_user)
 ):
     if not user:
@@ -430,23 +431,23 @@ async def sign(
     if len(password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     try:
-        private_key_hex = get_user_private_key(user["id"], password, wallet_address)
+        from app.services.wallet_identity import require_signing_wallet
+
+        wallet = require_signing_wallet(
+            user_id=user["id"],
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+        )
+        private_key_hex = get_user_private_key(
+            user["id"],
+            password,
+            wallet_id=wallet["id"],
+        )
+
         from app.services.transaction import sign_transaction
-        if wallet_address:
-            # Ownership already verified inside get_user_private_key above.
-            from_address = wallet_address
-        else:
-            from app.core.database import get_db
-            with get_db() as conn:
-                with conn.cursor() as c:
-                    c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
-                    row = c.fetchone()
-                    if not row or not row[0]:
-                        raise HTTPException(400, "No wallet address found")
-                    from_address = row[0]
         signed_hex = sign_transaction(
             chain=chain,
-            from_address=from_address,
+            from_address=wallet["address"],
             to_address=transaction["to"],
             value_wei=transaction.get("value", 0),
             private_key_hex=private_key_hex,
@@ -456,6 +457,8 @@ async def sign(
             nonce=transaction.get("nonce")
         )
         return {"signed_tx": signed_hex}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         logger.error(f"Sign failed: {e}")
         raise HTTPException(500, f"Sign failed: {str(e)}")

@@ -421,7 +421,7 @@ def init_db():
                 # This DROP is intentionally left in place (not removed after
                 # first run) since IF EXISTS makes it a permanent no-op once
                 # the old table is gone - safe to run on every startup.
-                c.execute("DROP TABLE IF EXISTS safe_transactions")
+                # Safe transaction history is preserved; migration is additive.
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS safe_transactions (
@@ -440,6 +440,8 @@ def init_db():
                         executed_at TIMESTAMP
                     )
                 """)
+                c.execute("ALTER TABLE safe_transactions ADD COLUMN IF NOT EXISTS proposer_wallet_id UUID REFERENCES os_wallets(id) ON DELETE SET NULL")
+                c.execute("ALTER TABLE safe_transactions ADD COLUMN IF NOT EXISTS executor_wallet_id UUID REFERENCES os_wallets(id) ON DELETE SET NULL")
                 c.execute("""
                     UPDATE close_transactions ct
                     SET wallet_address = u.wallet_address
