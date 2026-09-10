@@ -14,6 +14,7 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.services.blockchain import get_all_balances, get_token_balance, send_close_from_distribution, get_web3, ERC20_ABI
 from app.services.coingecko_service import get_token_price, get_market_data_for_ids
+from app.services.wallet_identity import require_signing_wallet
 
 logger = logging.getLogger(__name__)
 
@@ -292,31 +293,36 @@ def get_user_transactions(user_id: str, limit: int = 20) -> list:
                 for row in rows
             ]
 
-def get_user_private_key(user_id: str, password: str, wallet_address: str = None) -> str:
-    """If wallet_address is given, looks up that specific os_wallets row -
-    scoped to (user_id, address), so a user can never reach a wallet they
-    don't own even by guessing an address. If omitted, falls back to the
-    user's primary wallet (users.wallet_address) rather than an
-    unordered LIMIT 1, which was previously non-deterministic once a
-    user had more than one os_wallets row."""
+def get_user_private_key(
+    user_id: str,
+    password: str,
+    wallet_address: str = None,
+    wallet_id: str = None,
+) -> str:
+    """Decrypt the exact wallet selected by the authenticated user."""
+    wallet = require_signing_wallet(
+        user_id=user_id,
+        wallet_id=wallet_id,
+        wallet_address=wallet_address,
+    )
+
     with get_db() as conn:
         with conn.cursor() as c:
-            if wallet_address:
-                c.execute(
-                    "SELECT encrypted_key FROM os_wallets WHERE user_id = %s AND address = %s",
-                    (user_id, wallet_address)
-                )
-            else:
-                c.execute("""
-                    SELECT ow.encrypted_key FROM os_wallets ow
-                    JOIN users u ON u.wallet_address = ow.address
-                    WHERE ow.user_id = %s AND u.id = %s
-                """, (user_id, user_id))
+            c.execute(
+                """
+                SELECT encrypted_key
+                FROM os_wallets
+                WHERE id = %s
+                  AND user_id = %s
+                """,
+                (wallet["id"], user_id),
+            )
             row = c.fetchone()
-            if not row or not row[0]:
-                raise ValueError("No wallet found for user")
-            encrypted_key = row[0]
-            return _decrypt_private_key(encrypted_key, password)
+
+    if not row or not row[0]:
+        raise ValueError("Selected wallet has no backend signing key")
+
+    return _decrypt_private_key(row[0], password)
 
 def send_transaction(
     user_id: str,
@@ -326,23 +332,24 @@ def send_transaction(
     amount_wei: int,
     token_address: str = None,
     data: str = "0x",
-    wallet_address: str = None
+    wallet_address: str = None,
+    wallet_id: str = None,
 ) -> str:
-    private_key_hex = get_user_private_key(user_id, password, wallet_address)
+    wallet = require_signing_wallet(
+        user_id=user_id,
+        wallet_id=wallet_id,
+        wallet_address=wallet_address,
+    )
 
-    if wallet_address:
-        # Ownership already verified inside get_user_private_key above
-        # (the query is scoped to user_id AND address - it raises if no
-        # matching row exists for this user).
-        from_address = wallet_address
-    else:
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
-                row = c.fetchone()
-                if not row or not row[0]:
-                    raise ValueError("No wallet address found")
-                from_address = row[0]
+    private_key_hex = get_user_private_key(
+        user_id=user_id,
+        password=password,
+        wallet_id=wallet["id"],
+    )
+
+    # The identity service is authoritative. Never use a caller-supplied
+    # address as the actual signing address.
+    from_address = wallet["address"]
 
     if token_address:
         def pad_hex(value, length=64):
@@ -400,26 +407,28 @@ def sign_and_broadcast_swap(
     data: str,
     value_wei: int = 0,
     wallet_address: str = None,
+    wallet_id: str = None,
 ) -> str:
     """
-    Signs and broadcasts arbitrary contract calldata (e.g. a KyberSwap
-    router swap) using the user's own decrypted private key - same
-    non-custodial pattern as send_transaction, but for a contract call
-    rather than a simple transfer. to_address is the router contract,
-    data is the encoded swap calldata from POST /swap (route/build).
-    """
-    private_key_hex = get_user_private_key(user_id, password, wallet_address)
+    Sign and broadcast swap calldata using the exact selected wallet.
 
-    if wallet_address:
-        from_address = wallet_address
-    else:
-        with get_db() as conn:
-            with conn.cursor() as c:
-                c.execute("SELECT wallet_address FROM users WHERE id = %s", (user_id,))
-                row = c.fetchone()
-                if not row or not row[0]:
-                    raise ValueError("No wallet address found")
-                from_address = row[0]
+    wallet_id is the stable wallet identity. wallet_address is retained
+    as a verification field; it can never cause a primary-wallet fallback.
+    """
+    wallet = require_signing_wallet(
+        user_id=user_id,
+        wallet_id=wallet_id,
+        wallet_address=wallet_address,
+    )
+
+    private_key_hex = get_user_private_key(
+        user_id=user_id,
+        password=password,
+        wallet_id=wallet["id"],
+        wallet_address=wallet["address"],
+    )
+
+    from_address = wallet["address"]
 
     from app.services.transaction import sign_transaction, broadcast_transaction
     signed_hex = sign_transaction(
@@ -440,7 +449,6 @@ def sign_and_broadcast_swap(
             """, (str(uuid.uuid4()), user_id, "swap", 0, tx_hash, chain, "completed", from_address))
             conn.commit()
     return tx_hash
-
 
 def decrypt_private_key(encrypted_key: str, password: str) -> str:
     """Decrypt a private key using the same scheme as _encrypt_private_key."""

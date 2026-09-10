@@ -69,29 +69,38 @@ async def get_swap_calldata(
     chain: str = Body(...),
     routeSummary: dict = Body(..., description="The routeSummary object exactly as returned by /quote"),
     fromAddress: str = Body(...),
+    wallet_id: str = Body(..., description="Stable os_wallets ID for the wallet that should sign"),
     slippageBps: int = Body(50, description="Slippage tolerance in bps, e.g. 50 = 0.5%"),
     user=Depends(get_current_user)
 ):
-    """
-    Encodes the swap into ready-to-sign calldata. Does NOT sign or
-    broadcast anything - returns {to, data, value} for the frontend to sign
-    with the user's own wallet (via /wallet/send-style signing), matching
-    the non-custodial pattern used everywhere else in this app. Matches
-    KyberSwap's [V1] Post Swap Route For Encoded Data.
-    """
+    """Build swap calldata for the exact wallet selected by the user."""
     if not user:
         raise HTTPException(401, "Authentication required")
     if chain not in settings.SUPPORTED_CHAINS:
         raise HTTPException(400, f"Unsupported chain: {chain}")
     if not fromAddress:
         raise HTTPException(400, "fromAddress is required")
+    if not wallet_id:
+        raise HTTPException(400, "wallet_id is required")
+
+    from app.services.wallet_identity import require_signing_wallet
+    try:
+        wallet = require_signing_wallet(
+            user_id=user["id"],
+            wallet_id=wallet_id,
+            wallet_address=fromAddress,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    authoritative_address = wallet["address"]
 
     url = f"{KYBERSWAP_API_BASE}/{chain}/api/v1/route/build"
     headers = {"X-Client-Id": KYBERSWAP_CLIENT_ID, "Content-Type": "application/json"}
     body = {
         "routeSummary": routeSummary,
-        "sender": fromAddress,
-        "recipient": fromAddress,
+        "sender": authoritative_address,
+        "recipient": authoritative_address,
         "slippageTolerance": slippageBps,
     }
     try:
@@ -106,13 +115,14 @@ async def get_swap_calldata(
             "value": data.get("transactionValue", "0"),
             "amountOut": data.get("amountOut"),
             "amountOutUsd": data.get("amountOutUsd"),
+            "wallet_id": wallet["id"],
+            "wallet_address": authoritative_address,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"KyberSwap build exception: {e}")
         raise HTTPException(500, "Internal server error")
-
 
 @router.post("/execute")
 async def execute_swap(
@@ -121,22 +131,28 @@ async def execute_swap(
     data: str = Body(..., description="Encoded swap calldata, from /swap response"),
     value: str = Body("0", description="Transaction value in wei, from /swap response"),
     password: str = Body(...),
-    wallet_address: str = Body(None, description="Swap from a specific imported wallet instead of the primary wallet"),
+    wallet_id: str = Body(..., description="Stable os_wallets ID for the wallet that should sign"),
+    wallet_address: str = Body(..., description="Authoritative wallet address returned by /swap"),
     user=Depends(get_current_user)
 ):
-    """
-    Signs and broadcasts the swap using the user's own wallet - the final
-    step after /quote and /swap have prepared the route and calldata. Same
-    non-custodial pattern as /wallet/send: password decrypts the user's own
-    key locally in this request, never stored, never sent anywhere else.
-    """
+    """Sign and broadcast using the exact wallet bound during swap build."""
     if not user:
         raise HTTPException(401, "Authentication required")
     if len(password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+    if not wallet_id:
+        raise HTTPException(400, "wallet_id is required")
+    if not wallet_address:
+        raise HTTPException(400, "wallet_address is required")
 
+    from app.services.wallet_identity import require_signing_wallet
     from app.services.wallet_service import sign_and_broadcast_swap
     try:
+        wallet = require_signing_wallet(
+            user_id=user["id"],
+            wallet_id=wallet_id,
+            wallet_address=wallet_address,
+        )
         tx_hash = sign_and_broadcast_swap(
             user_id=user["id"],
             password=password,
@@ -144,7 +160,8 @@ async def execute_swap(
             to_address=to,
             data=data,
             value_wei=int(value),
-            wallet_address=wallet_address,
+            wallet_id=wallet["id"],
+            wallet_address=wallet["address"],
         )
         return {"tx_hash": tx_hash}
     except ValueError as e:
@@ -153,23 +170,15 @@ async def execute_swap(
         logger.error(f"Swap execution failed: {e}")
         raise HTTPException(500, f"Swap execution failed: {str(e)}")
 
-
 @router.post("/send-sponsored")
 async def send_sponsored(
     to_address: str = Body(...),
     amount: float = Body(...),
     password: str = Body(...),
-    wallet_address: str = Body(None, description="Send from a specific imported wallet instead of the primary wallet"),
+    wallet_id: str = Body(..., description="Stable os_wallets ID for the wallet that should sign"),
     user=Depends(get_current_user)
 ):
-    """
-    Sends CLOSE with the relayer paying gas, for wallets that don't hold
-    POL. First call for a given wallet also runs a one-time bootstrap
-    (relayer drips a little POL, wallet approves the relayer to move
-    CLOSE) - transparent to the caller, just adds a bit of latency on the
-    first sponsored send only. Capped at a few sends per wallet per day;
-    see gas_sponsor.DAILY_SPONSORED_TX_CAP.
-    """
+    """Send sponsored CLOSE from the exact selected custodial wallet."""
     if not user:
         raise HTTPException(401, "Authentication required")
     if len(password) < 8:
@@ -178,25 +187,25 @@ async def send_sponsored(
         raise HTTPException(400, "Amount must be greater than 0")
     if not to_address:
         raise HTTPException(400, "to_address is required")
+    if not wallet_id:
+        raise HTTPException(400, "wallet_id is required")
 
+    from app.services.wallet_identity import require_signing_wallet
     from app.services.wallet_service import get_user_private_key
     from app.services import gas_sponsor
 
     try:
-        if wallet_address:
-            # Ownership verified inside get_user_private_key below (query
-            # is scoped to user_id AND address - raises if not owned).
-            user_address = wallet_address
-        else:
-            with get_db() as conn:
-                with conn.cursor() as c:
-                    c.execute("SELECT wallet_address FROM users WHERE id = %s", (user["id"],))
-                    row = c.fetchone()
-                    if not row or not row[0]:
-                        raise HTTPException(400, "No wallet address found")
-                    user_address = row[0]
-
-        private_key = get_user_private_key(user["id"], password, wallet_address)
+        wallet = require_signing_wallet(
+            user_id=user["id"],
+            wallet_id=wallet_id,
+        )
+        user_address = wallet["address"]
+        private_key = get_user_private_key(
+            user["id"],
+            password,
+            wallet_id=wallet["id"],
+            wallet_address=user_address,
+        )
 
         gas_sponsor.ensure_bootstrapped(user["id"], user_address, private_key)
         result = gas_sponsor.sponsored_close_send(

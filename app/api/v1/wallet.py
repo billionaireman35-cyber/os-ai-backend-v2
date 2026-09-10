@@ -390,7 +390,8 @@ async def send(
     password: str = Body(...),
     token_address: str = Body(None),
     data: str = Body("0x"),
-    wallet_address: str = Body(None, description="Send from a specific imported wallet instead of the primary wallet"),
+    wallet_address: str = Body(None, description="Legacy wallet address selector; wallet_id is authoritative when supplied"),
+    wallet_id: str = Body(None, description="Stable os_wallets ID for the wallet that should sign"),
     user=Depends(get_current_user)
 ):
     if not user:
@@ -406,7 +407,8 @@ async def send(
             amount_wei=amount_wei,
             token_address=token_address,
             data=data,
-            wallet_address=wallet_address
+            wallet_address=wallet_address,
+            wallet_id=wallet_id,
         )
         return {"tx_hash": tx_hash}
     except ValueError as e:
