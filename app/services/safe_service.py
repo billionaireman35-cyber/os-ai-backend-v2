@@ -443,9 +443,16 @@ def sign_connected_safe_transaction(
     signature_bytes = bytes.fromhex(
         signature[2:] if signature.startswith("0x") else signature
     )
-    if signature_bytes[64] in (0, 1):
-        signature_bytes = signature_bytes[:64] + bytes([signature_bytes[64] + 27])
 
+    # Safe stores eth_sign signatures with v = 31/32.
+    # The verifier above accepts the wallet's normal 0/1 or 27/28 form.
+    v = signature_bytes[64]
+    if v in (0, 1):
+        v += 27
+    if v in (27, 28):
+        v += 4
+
+    signature_bytes = signature_bytes[:64] + bytes([v])
     normalized_signature = "0x" + signature_bytes.hex()
 
     signatures.append({
