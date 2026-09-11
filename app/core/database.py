@@ -389,6 +389,34 @@ def init_db():
                     )
                 """)
 
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS notifications (
+                        id UUID PRIMARY KEY,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        type TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        url TEXT,
+                        data JSONB NOT NULL DEFAULT '{}',
+                        read BOOLEAN NOT NULL DEFAULT FALSE,
+                        event_key TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_notifications_user_created
+                    ON notifications(user_id, created_at DESC)
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
+                    ON notifications(user_id, read, created_at DESC)
+                """)
+                c.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_event
+                    ON notifications(user_id, event_key)
+                    WHERE event_key IS NOT NULL
+                """)
+
                 # Additional columns for existing tables (safe to run)
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE")
                 c.execute("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'")
