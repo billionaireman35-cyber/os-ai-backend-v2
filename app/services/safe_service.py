@@ -676,7 +676,7 @@ def list_pending_transactions(
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                SELECT id, to_address, value_wei, data, safe_nonce, signatures, status, exec_tx_hash, created_at
+                SELECT id, to_address, value_wei, data, safe_nonce, safe_tx_hash, signatures, status, exec_tx_hash, created_at
                 FROM safe_transactions
                 WHERE safe_id = %s
                 ORDER BY created_at DESC
@@ -685,10 +685,10 @@ def list_pending_transactions(
             return [
                 {
                     "id": r[0], "to_address": r[1], "value_wei": r[2], "data": r[3],
-                    "safe_nonce": r[4], "signatures_collected": len(r[5]),
-                    "signers": [s["owner"] for s in r[5]], "threshold": threshold,
-                    "status": r[6], "exec_tx_hash": r[7],
-                    "created_at": r[8].isoformat() if r[8] else None,
+                    "safe_nonce": r[4], "safe_tx_hash": r[5], "signatures_collected": len(r[6]),
+                    "signers": [s["owner"] for s in r[6]], "threshold": threshold,
+                    "status": r[7], "exec_tx_hash": r[8],
+                    "created_at": r[9].isoformat() if r[9] else None,
                 }
                 for r in rows
             ]
