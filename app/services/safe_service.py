@@ -21,6 +21,7 @@ from app.services.blockchain import get_web3
 from app.services.transaction import sign_transaction, broadcast_transaction, sign_safe_hash
 from app.services.wallet_service import get_user_private_key
 from app.services.wallet_identity import require_signing_wallet, resolve_wallet_identity
+from app.services.notification_service import create_notification
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +291,70 @@ def find_owner_wallet(owner_address: str) -> dict | None:
             return {"user_id": row[0], "wallet_type": row[1] or "custodial"}
 
 
+def _safe_notify_users(
+    user_ids: list,
+    notification_type: str,
+    title: str,
+    body: str,
+    url: str | None = None,
+    data: dict | None = None,
+    event_prefix: str | None = None,
+) -> None:
+    """Best-effort persistent notifications for Safe events."""
+    seen = set()
+
+    for target_user_id in user_ids:
+        if not target_user_id or target_user_id in seen:
+            continue
+
+        seen.add(target_user_id)
+
+        try:
+            event_key = (
+                f"{event_prefix}:{target_user_id}"
+                if event_prefix
+                else None
+            )
+
+            create_notification(
+                user_id=str(target_user_id),
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                url=url,
+                data=data or {},
+                event_key=event_key,
+            )
+        except Exception as exc:
+            logger.error(
+                "Safe notification failed for user %s: %s",
+                target_user_id,
+                exc,
+            )
+
+
+def _safe_owner_user_ids(
+    owners: list,
+    exclude_user_id: str | None = None,
+) -> list:
+    """Resolve known OS AI users for Safe owner addresses."""
+    user_ids = []
+
+    for owner_address in owners or []:
+        owner = find_owner_wallet(owner_address)
+
+        if not owner:
+            continue
+
+        if exclude_user_id and str(owner["user_id"]) == str(exclude_user_id):
+            continue
+
+        user_ids.append(owner["user_id"])
+
+    return user_ids
+
+
+
 def propose_safe_transaction(
     safe_id: str,
     user_id: str,
@@ -366,6 +431,23 @@ def propose_safe_transaction(
             """, (tx_id, safe_id, user_id, proposer_wallet["id"], to_address, str(value_wei), data, safe_nonce, safe_tx_hash_hex, json.dumps(signatures), "pending"))
             conn.commit()
 
+    _safe_notify_users(
+        _safe_owner_user_ids(owners, exclude_user_id=user_id),
+        "safe_signature_needed",
+        "Safe signature needed",
+        f"A Safe transaction for {to_address} was proposed and needs your signature.",
+        url="/safe",
+        data={
+            "safe_id": safe_id,
+            "transaction_id": tx_id,
+            "safe_tx_hash": safe_tx_hash_hex,
+            "to_address": to_address,
+            "value_wei": str(value_wei),
+            "threshold": threshold,
+        },
+        event_prefix=f"safe:{safe_id}:tx:{tx_id}:signature-needed",
+    )
+
     return {
         "id": tx_id,
         "safe_id": safe_id,
@@ -399,7 +481,7 @@ def sign_connected_safe_transaction(
         with conn.cursor() as c:
             c.execute("""
                 SELECT st.safe_id, st.safe_tx_hash, st.signatures, st.status,
-                       s.owners, s.threshold
+                       st.proposer_user_id, s.owners, s.threshold
                 FROM safe_transactions st
                 JOIN safes s ON s.id = st.safe_id
                 WHERE st.id = %s
@@ -409,7 +491,7 @@ def sign_connected_safe_transaction(
     if not row:
         raise ValueError("Proposal not found")
 
-    safe_id, safe_tx_hash_hex, signatures, status, owners, threshold = row
+    safe_id, safe_tx_hash_hex, signatures, status, proposer_user_id, owners, threshold = row
 
     if status != "pending":
         raise ValueError(f"This proposal is already {status}")
@@ -468,12 +550,47 @@ def sign_connected_safe_transaction(
             )
             conn.commit()
 
+    ready_to_execute = len(signatures) >= threshold
+
+    _safe_notify_users(
+        [proposer_user_id],
+        "safe_signature_added",
+        "Safe signature added",
+        f"An owner signed your Safe transaction ({len(signatures)}/{threshold}).",
+        url="/safe",
+        data={
+            "safe_id": safe_id,
+            "transaction_id": tx_id,
+            "safe_tx_hash": safe_tx_hash_hex,
+            "signatures_collected": len(signatures),
+            "threshold": threshold,
+        },
+        event_prefix=f"safe:{safe_id}:tx:{tx_id}:signature:{signer_address.lower()}",
+    )
+
+    if ready_to_execute:
+        _safe_notify_users(
+            _safe_owner_user_ids(owners),
+            "safe_ready_to_execute",
+            "Safe ready to execute",
+            f"A Safe transaction has reached its signing threshold ({len(signatures)}/{threshold}) and is ready to execute.",
+            url="/safe",
+            data={
+                "safe_id": safe_id,
+                "transaction_id": tx_id,
+                "safe_tx_hash": safe_tx_hash_hex,
+                "signatures_collected": len(signatures),
+                "threshold": threshold,
+            },
+            event_prefix=f"safe:{safe_id}:tx:{tx_id}:ready",
+        )
+
     return {
         "id": tx_id,
         "safe_id": safe_id,
         "signatures_collected": len(signatures),
         "threshold": threshold,
-        "ready_to_execute": len(signatures) >= threshold,
+        "ready_to_execute": ready_to_execute,
         "status": "pending",
     }
 
@@ -496,7 +613,7 @@ def sign_safe_transaction(
         with conn.cursor() as c:
             c.execute("""
                 SELECT st.safe_id, st.safe_tx_hash, st.signatures, st.status,
-                       s.owners, s.threshold, s.chain, s.address
+                       st.proposer_user_id, s.owners, s.threshold, s.chain, s.address
                 FROM safe_transactions st
                 JOIN safes s ON s.id = st.safe_id
                 WHERE st.id = %s
@@ -504,7 +621,7 @@ def sign_safe_transaction(
             row = c.fetchone()
             if not row:
                 raise ValueError("Proposal not found")
-            safe_id, safe_tx_hash_hex, signatures, status, owners, threshold, chain, safe_address = row
+            safe_id, safe_tx_hash_hex, signatures, status, proposer_user_id, owners, threshold, chain, safe_address = row
 
     if status != "pending":
         raise ValueError(f"This proposal is already {status}")
@@ -538,12 +655,47 @@ def sign_safe_transaction(
             )
             conn.commit()
 
+    ready_to_execute = len(signatures) >= threshold
+
+    _safe_notify_users(
+        [proposer_user_id],
+        "safe_signature_added",
+        "Safe signature added",
+        f"An owner signed your Safe transaction ({len(signatures)}/{threshold}).",
+        url="/safe",
+        data={
+            "safe_id": safe_id,
+            "transaction_id": tx_id,
+            "safe_tx_hash": safe_tx_hash_hex,
+            "signatures_collected": len(signatures),
+            "threshold": threshold,
+        },
+        event_prefix=f"safe:{safe_id}:tx:{tx_id}:signature:{signer_address.lower()}",
+    )
+
+    if ready_to_execute:
+        _safe_notify_users(
+            _safe_owner_user_ids(owners),
+            "safe_ready_to_execute",
+            "Safe ready to execute",
+            f"A Safe transaction has reached its signing threshold ({len(signatures)}/{threshold}) and is ready to execute.",
+            url="/safe",
+            data={
+                "safe_id": safe_id,
+                "transaction_id": tx_id,
+                "safe_tx_hash": safe_tx_hash_hex,
+                "signatures_collected": len(signatures),
+                "threshold": threshold,
+            },
+            event_prefix=f"safe:{safe_id}:tx:{tx_id}:ready",
+        )
+
     return {
         "id": tx_id,
         "safe_id": safe_id,
         "signatures_collected": len(signatures),
         "threshold": threshold,
-        "ready_to_execute": len(signatures) >= threshold,
+        "ready_to_execute": ready_to_execute,
         "status": "pending",
     }
 
@@ -569,8 +721,8 @@ def execute_safe_transaction(
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                SELECT st.to_address, st.value_wei, st.data, st.safe_nonce,
-                       st.signatures, st.status,
+                SELECT st.safe_id, st.to_address, st.value_wei, st.data, st.safe_nonce,
+                       st.signatures, st.status, st.proposer_user_id, st.safe_tx_hash,
                        s.chain, s.address, s.threshold, s.owners
                 FROM safe_transactions st
                 JOIN safes s ON s.id = st.safe_id
@@ -579,8 +731,8 @@ def execute_safe_transaction(
             row = c.fetchone()
             if not row:
                 raise ValueError("Proposal not found")
-            (to_address, value_wei_str, data, safe_nonce, signatures, status,
-             chain, safe_address, threshold, owners) = row
+            (safe_id, to_address, value_wei_str, data, safe_nonce, signatures, status,
+             proposer_user_id, safe_tx_hash_hex, chain, safe_address, threshold, owners) = row
 
     if status != "pending":
         raise ValueError(f"This proposal is already {status}")
@@ -645,6 +797,23 @@ def execute_safe_transaction(
                 WHERE id = %s
             """, (exec_tx_hash, executor_wallet["id"], tx_id))
             conn.commit()
+
+    _safe_notify_users(
+        _safe_owner_user_ids(owners),
+        "safe_executed",
+        "Safe transaction executed",
+        f"A Safe transaction to {to_address} was executed successfully.",
+        url="/safe",
+        data={
+            "safe_id": safe_id,
+            "transaction_id": tx_id,
+            "safe_tx_hash": safe_tx_hash_hex,
+            "exec_tx_hash": exec_tx_hash,
+            "to_address": to_address,
+            "value_wei": str(value_wei_str),
+        },
+        event_prefix=f"safe:{safe_id}:tx:{tx_id}:executed",
+    )
 
     return {
         "id": tx_id,
