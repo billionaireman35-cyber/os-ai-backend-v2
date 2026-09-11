@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from app.core.security import get_current_user
-from app.services.safe_service import create_safe, list_safes, get_safe_balance, propose_safe_transaction, sign_safe_transaction, execute_safe_transaction, list_pending_transactions
+from app.services.safe_service import create_safe, list_safes, get_safe_balance, propose_safe_transaction, sign_safe_transaction, execute_safe_transaction, list_pending_transactions, sign_connected_safe_transaction
 import logging
 
 router = APIRouter()
@@ -132,6 +132,33 @@ async def sign_safe_transaction_endpoint(
     except Exception as e:
         logger.error(f"Safe sign error: {e}")
         raise HTTPException(500, "Failed to sign transaction")
+
+
+@router.post("/transactions/{tx_id}/sign-connected")
+async def sign_connected_safe_transaction_endpoint(
+    tx_id: str,
+    wallet_id: str = Body(...),
+    signature: str = Body(...),
+    user=Depends(get_current_user),
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    if not signature or not signature.strip():
+        raise HTTPException(400, "Signature is required")
+
+    try:
+        return sign_connected_safe_transaction(
+            tx_id=tx_id,
+            user_id=user["id"],
+            wallet_id=wallet_id,
+            signature=signature,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Connected Safe sign error: {e}")
+        raise HTTPException(500, "Failed to submit connected wallet signature")
 
 
 @router.post("/transactions/{tx_id}/execute")

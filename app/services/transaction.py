@@ -5,6 +5,7 @@ from ecdsa import SigningKey, SECP256k1
 from ecdsa.util import sigencode_der, sigdecode_der
 from ecdsa.numbertheory import inverse_mod, square_root_mod_prime
 from ecdsa.ellipticcurve import Point, INFINITY
+from eth_utils import to_checksum_address
 from app.core.config import settings
 import logging
 
@@ -136,13 +137,13 @@ def _recover_public_key_from_signature(msg_hash: bytes, r: int, s: int, recid: i
         if y % 2 != 0:
             y = p - y
     R = Point(curve, x, y)
-    R_aff = R.to_affine()
-    G_aff = G.to_affine()
+    R_aff = R
+    G_aff = Point(curve, G.x(), G.y(), order)
 
     h_int = int.from_bytes(msg_hash, 'big')
     sR = s * R_aff
     hG = h_int * G_aff
-    diff = sR - hG
+    diff = sR + (-hG)
     r_inv = inverse_mod(r, order)
     Q = r_inv * diff
 
@@ -195,6 +196,53 @@ def sign_safe_hash(safe_tx_hash_hex: str, private_key_hex: str, expected_address
     v = 27 + recid
     sig_bytes = r.to_bytes(32, 'big') + s.to_bytes(32, 'big') + bytes([v])
     return "0x" + sig_bytes.hex()
+
+
+def verify_safe_hash_signature(
+    safe_tx_hash_hex: str,
+    signature_hex: str,
+    expected_address: str,
+) -> str:
+    """Recover and verify an externally supplied Safe hash signature.
+
+    Accepts a 65-byte Ethereum ECDSA signature in r(32) + s(32) + v(1)
+    format. v may be 0/1 or 27/28. Returns the recovered checksummed
+    address when it matches expected_address.
+    """
+    msg_hash = hex_to_bytes(safe_tx_hash_hex)
+    if len(msg_hash) != 32:
+        raise ValueError("Expected a 32-byte Safe transaction hash")
+
+    sig_bytes = hex_to_bytes(signature_hex)
+    if len(sig_bytes) != 65:
+        raise ValueError("Safe signature must be exactly 65 bytes")
+
+    r = int.from_bytes(sig_bytes[0:32], "big")
+    s = int.from_bytes(sig_bytes[32:64], "big")
+    v = sig_bytes[64]
+
+    if v in (0, 1):
+        recid = v
+    elif v in (27, 28):
+        recid = v - 27
+    else:
+        raise ValueError("Invalid Safe signature recovery value")
+
+    if r <= 0 or r >= SECP256K1_N:
+        raise ValueError("Invalid Safe signature r value")
+    if s <= 0 or s > SECP256K1_HALF_N:
+        raise ValueError("Invalid Safe signature s value")
+
+    try:
+        vk = _recover_public_key_from_signature(msg_hash, r, s, recid)
+        recovered_address = "0x" + _keccak256(vk.to_string())[-20:].hex()
+    except Exception as e:
+        raise ValueError(f"Invalid Safe signature: {e}")
+
+    if recovered_address.lower() != expected_address.lower():
+        raise ValueError("Signature does not match the connected wallet")
+
+    return to_checksum_address(recovered_address)
 
 
 def sign_transaction(

@@ -379,6 +379,98 @@ def propose_safe_transaction(
     }
 
 
+
+def sign_connected_safe_transaction(
+    tx_id: str,
+    user_id: str,
+    wallet_id: str,
+    signature: str,
+) -> dict:
+    """Adds an externally produced signature from a connected Safe owner.
+
+    The backend never receives or accesses the connected wallet's private key.
+    It verifies the supplied signature against the stored Safe transaction
+    hash and the wallet address recorded for the authenticated user.
+    """
+    import json
+    from app.services.transaction import verify_safe_hash_signature
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT st.safe_id, st.safe_tx_hash, st.signatures, st.status,
+                       s.owners, s.threshold
+                FROM safe_transactions st
+                JOIN safes s ON s.id = st.safe_id
+                WHERE st.id = %s
+            """, (tx_id,))
+            row = c.fetchone()
+
+    if not row:
+        raise ValueError("Proposal not found")
+
+    safe_id, safe_tx_hash_hex, signatures, status, owners, threshold = row
+
+    if status != "pending":
+        raise ValueError(f"This proposal is already {status}")
+
+    wallet = resolve_wallet_identity(
+        user_id=user_id,
+        wallet_id=wallet_id,
+        require_signing=False,
+    )
+
+    if wallet["wallet_type"] != "connected":
+        raise ValueError("This endpoint is only for connected wallets")
+
+    signer_address = wallet["address"]
+
+    if signer_address.lower() not in [o.lower() for o in owners]:
+        raise ValueError("Only an owner of this Safe can sign this proposal")
+
+    if any(
+        sig["owner"].lower() == signer_address.lower()
+        for sig in signatures
+    ):
+        raise ValueError("You have already signed this proposal")
+
+    recovered_address = verify_safe_hash_signature(
+        safe_tx_hash_hex=safe_tx_hash_hex,
+        signature_hex=signature,
+        expected_address=signer_address,
+    )
+
+    signature_bytes = bytes.fromhex(
+        signature[2:] if signature.startswith("0x") else signature
+    )
+    if signature_bytes[64] in (0, 1):
+        signature_bytes = signature_bytes[:64] + bytes([signature_bytes[64] + 27])
+
+    normalized_signature = "0x" + signature_bytes.hex()
+
+    signatures.append({
+        "owner": recovered_address,
+        "signature": normalized_signature,
+    })
+
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "UPDATE safe_transactions SET signatures = %s WHERE id = %s",
+                (json.dumps(signatures), tx_id),
+            )
+            conn.commit()
+
+    return {
+        "id": tx_id,
+        "safe_id": safe_id,
+        "signatures_collected": len(signatures),
+        "threshold": threshold,
+        "ready_to_execute": len(signatures) >= threshold,
+        "status": "pending",
+    }
+
+
 def sign_safe_transaction(
     tx_id: str,
     user_id: str,
