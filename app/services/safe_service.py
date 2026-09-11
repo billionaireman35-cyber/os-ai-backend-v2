@@ -362,8 +362,8 @@ def propose_safe_transaction(
             c.execute("""
                 INSERT INTO safe_transactions
                     (id, safe_id, proposer_user_id, proposer_wallet_id, to_address, value_wei, data, safe_nonce, safe_tx_hash, signatures, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
-            """, (tx_id, safe_id, user_id, proposer_wallet["id"], to_address, str(value_wei), data, safe_nonce, safe_tx_hash_hex, json.dumps(signatures)))
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tx_id, safe_id, user_id, proposer_wallet["id"], to_address, str(value_wei), data, safe_nonce, safe_tx_hash_hex, json.dumps(signatures), "pending"))
             conn.commit()
 
     return {
