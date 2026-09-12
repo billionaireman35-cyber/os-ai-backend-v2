@@ -1,7 +1,23 @@
 import json
+import logging
 import uuid
 
 from app.core.database import get_db
+
+logger = logging.getLogger(__name__)
+
+
+def _dispatch_push(user_id: str, payload: dict) -> None:
+    try:
+        from app.services.push_service import send_push_to_user
+    except Exception as exc:
+        logger.warning("Push service unavailable: %s", exc)
+        return
+
+    try:
+        send_push_to_user(user_id=user_id, payload=payload)
+    except Exception as exc:
+        logger.error("Push dispatch failed: %s", exc)
 
 
 def create_notification(
@@ -13,11 +29,7 @@ def create_notification(
     data: dict | None = None,
     event_key: str | None = None,
 ) -> dict:
-    """Create a persistent in-app notification.
-
-    Stage 1 only persists notifications.
-    Push delivery will be connected in a later stage.
-    """
+    """Create a persistent notification and best-effort push it to the user."""
     if not user_id:
         raise ValueError("user_id is required")
 
@@ -94,7 +106,7 @@ def create_notification(
             row = c.fetchone()
             conn.commit()
 
-    return {
+    notification = {
         "id": str(row[0]),
         "user_id": str(row[1]),
         "type": row[2],
@@ -106,3 +118,17 @@ def create_notification(
         "event_key": row[8],
         "created_at": row[9],
     }
+
+    _dispatch_push(
+        user_id=str(row[1]),
+        payload={
+            "id": notification["id"],
+            "type": notification["type"],
+            "title": notification["title"],
+            "body": notification["body"],
+            "url": notification["url"],
+            "data": notification["data"],
+        },
+    )
+
+    return notification
