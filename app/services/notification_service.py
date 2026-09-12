@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from app.core.database import get_db
@@ -30,7 +31,7 @@ def create_notification(
         raise ValueError("body is required")
 
     notification_id = str(uuid.uuid4())
-    payload = data or {}
+    payload = json.loads(json.dumps(data or {}, default=str))
 
     with get_db() as conn:
         with conn.cursor() as c:
