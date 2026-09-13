@@ -49,12 +49,6 @@ def send_push_to_user(user_id: str, payload: dict) -> None:
             )
             subscriptions = c.fetchall()
 
-    logger.info(
-        "Push dispatch: user=%s subscriptions=%s",
-        user_id,
-        len(subscriptions),
-    )
-
     for subscription_id, endpoint, auth_key, p256dh_key in subscriptions:
         subscription_info = {
             "endpoint": endpoint,
