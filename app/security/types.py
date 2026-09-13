@@ -44,8 +44,8 @@ class SecurityContext:
     resource_id: str | None = None
     ip_address: str | None = None
     device_fingerprint: str | None = None
-    device_trusted: bool = True
-    authentication_strength: int = 100
+    device_trusted: bool | None = None
+    authentication_strength: int | None = None
     transaction_value_usd: float = 0.0
     destination_risk: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)

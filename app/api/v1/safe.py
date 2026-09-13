@@ -99,6 +99,9 @@ async def propose_safe_transaction_endpoint(
             value_wei=int(value_wei),
             data=data,
             wallet_id=wallet_id,
+            authentication_strength=user.get("authentication_strength"),
+            device_trusted=user.get("device_trusted"),
+            device_fingerprint=user.get("device_fingerprint"),
         )
     except ValueError as e:
         msg = str(e)
@@ -123,7 +126,15 @@ async def sign_safe_transaction_endpoint(
         raise HTTPException(400, "Invalid password")
 
     try:
-        return sign_safe_transaction(tx_id, user["id"], password, wallet_id)
+        return sign_safe_transaction(
+            tx_id,
+            user["id"],
+            password,
+            wallet_id,
+            user.get("authentication_strength"),
+            user.get("device_trusted"),
+            user.get("device_fingerprint"),
+        )
     except ValueError as e:
         msg = str(e)
         if "password" in msg.lower() or "decrypt" in msg.lower():
@@ -153,6 +164,9 @@ async def sign_connected_safe_transaction_endpoint(
             user_id=user["id"],
             wallet_id=wallet_id,
             signature=signature,
+            authentication_strength=user.get("authentication_strength"),
+            device_trusted=user.get("device_trusted"),
+            device_fingerprint=user.get("device_fingerprint"),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -174,7 +188,15 @@ async def execute_safe_transaction_endpoint(
         raise HTTPException(400, "Invalid password")
 
     try:
-        return execute_safe_transaction(tx_id, user["id"], password, wallet_id)
+        return execute_safe_transaction(
+            tx_id,
+            user["id"],
+            password,
+            wallet_id,
+            user.get("authentication_strength"),
+            user.get("device_trusted"),
+            user.get("device_fingerprint"),
+        )
     except ValueError as e:
         msg = str(e)
         if "password" in msg.lower() or "decrypt" in msg.lower():

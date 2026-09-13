@@ -149,7 +149,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                  safe_service,
                  "get_user_private_key",
                  return_value="0xprivate-b",
-             ) as get_key:
+             ) as get_key,              patch.object(safe_service, "_safe_security_gate"):
 
             # Stop after identity/key selection; blockchain work is outside
             # this authorization regression test.
@@ -187,6 +187,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                     "0xhash",
                     [{"owner": ADDRESS_A, "signature": "0xsig"}],
                     "pending",
+                    USER_A,
                     [ADDRESS_A, ADDRESS_B],
                     2,
                     "polygon",
@@ -225,6 +226,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                     "0xhash",
                     [{"owner": ADDRESS_A, "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}],
                     "pending",
+                    USER_A,
                     [ADDRESS_A, ADDRESS_B],
                     2,
                     "polygon",
@@ -250,6 +252,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                  "get_user_private_key",
                  return_value="0xprivate-b",
              ) as get_key, \
+             patch.object(safe_service, "_safe_security_gate"), \
              patch.object(
                  safe_service,
                  "sign_safe_hash",
@@ -274,14 +277,17 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
     def test_executor_must_be_safe_owner(self):
         rows = [
             (
-                "SELECT st.to_address, st.value_wei, st.data, st.safe_nonce",
+                "SELECT st.safe_id, st.to_address, st.value_wei, st.data, st.safe_nonce",
                 (
+                    SAFE_ID,
                     ADDRESS_A,
                     "1",
                     "0x",
                     0,
                     [{"owner": ADDRESS_A, "signature": "0xsig"}],
                     "pending",
+                    USER_A,
+                    "0xhash",
                     "polygon",
                     ADDRESS_A,
                     1,
@@ -314,14 +320,17 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
     def test_executor_uses_selected_wallet_as_gas_signer(self):
         rows = [
             (
-                "SELECT st.to_address, st.value_wei, st.data, st.safe_nonce",
+                "SELECT st.safe_id, st.to_address, st.value_wei, st.data, st.safe_nonce",
                 (
+                    SAFE_ID,
                     ADDRESS_A,
                     "1",
                     "0x",
                     0,
                     [{"owner": ADDRESS_A, "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}],
                     "pending",
+                    USER_A,
+                    "0xhash",
                     "polygon",
                     ADDRESS_A,
                     1,
@@ -347,6 +356,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                  "get_user_private_key",
                  return_value="0xprivate-b",
              ) as get_key, \
+             patch.object(safe_service, "_safe_security_gate"), \
              patch.object(
                  safe_service,
                  "get_web3",

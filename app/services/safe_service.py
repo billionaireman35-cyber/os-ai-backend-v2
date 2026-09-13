@@ -22,8 +22,39 @@ from app.services.transaction import sign_transaction, broadcast_transaction, si
 from app.services.wallet_service import get_user_private_key
 from app.services.wallet_identity import require_signing_wallet, resolve_wallet_identity
 from app.services.notification_service import create_notification
+from app.security.engine import evaluate_security
+from app.security.types import SecurityAction, SecurityContext, SecurityDecision
 
 logger = logging.getLogger(__name__)
+
+def _safe_security_gate(
+    user_id,
+    wallet_id,
+    resource_id,
+    ip_address=None,
+    transaction_value_usd=0.0,
+    authentication_strength=None,
+    device_trusted=None,
+    device_fingerprint=None,
+):
+    result = evaluate_security(SecurityContext(
+        action=SecurityAction.SAFE_OPERATION,
+        user_id=user_id,
+        wallet_id=wallet_id,
+        resource_type="safe_transaction",
+        resource_id=resource_id,
+        ip_address=ip_address,
+        device_fingerprint=device_fingerprint,
+        device_trusted=device_trusted,
+        authentication_strength=authentication_strength,
+        transaction_value_usd=transaction_value_usd,
+    ))
+    if result.decision == SecurityDecision.BLOCK:
+        raise ValueError("Security policy blocked this Safe operation")
+    if result.decision == SecurityDecision.STEP_UP:
+        raise ValueError("Additional authentication is required for this Safe operation")
+    return result
+
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -363,6 +394,9 @@ def propose_safe_transaction(
     value_wei: int,
     data: str = "0x",
     wallet_id: str = None,
+    authentication_strength=None,
+    device_trusted=None,
+    device_fingerprint=None,
 ) -> dict:
     """Proposes a withdrawal/transfer from a Safe: computes the exact
     on-chain transaction hash via the Safe's own getTransactionHash (so
@@ -388,6 +422,16 @@ def propose_safe_transaction(
 
     if proposer_address.lower() not in [o.lower() for o in owners]:
         raise ValueError("Only an owner of this Safe can propose a transaction")
+
+    _safe_security_gate(
+        user_id=user_id,
+        wallet_id=proposer_wallet["id"],
+        resource_id=safe_id,
+        transaction_value_usd=0.0,
+        authentication_strength=authentication_strength,
+        device_trusted=device_trusted,
+        device_fingerprint=device_fingerprint,
+    )
 
     private_key_hex = get_user_private_key(
         user_id=user_id,
@@ -467,6 +511,9 @@ def sign_connected_safe_transaction(
     user_id: str,
     wallet_id: str,
     signature: str,
+    authentication_strength=None,
+    device_trusted=None,
+    device_fingerprint=None,
 ) -> dict:
     """Adds an externally produced signature from a connected Safe owner.
 
@@ -515,6 +562,16 @@ def sign_connected_safe_transaction(
         for sig in signatures
     ):
         raise ValueError("You have already signed this proposal")
+
+    _safe_security_gate(
+        user_id=user_id,
+        wallet_id=wallet_id,
+        resource_id=tx_id,
+        transaction_value_usd=0.0,
+        authentication_strength=authentication_strength,
+        device_trusted=device_trusted,
+        device_fingerprint=device_fingerprint,
+    )
 
     recovered_address = verify_safe_hash_signature(
         safe_tx_hash_hex=safe_tx_hash_hex,
@@ -600,6 +657,9 @@ def sign_safe_transaction(
     user_id: str,
     password: str,
     wallet_id: str = None,
+    authentication_strength=None,
+    device_trusted=None,
+    device_fingerprint=None,
 ) -> dict:
     """Adds one more owner's signature to an existing pending proposal.
     Recomputes the same safe_tx_hash from the stored proposal (rather than
@@ -637,6 +697,16 @@ def sign_safe_transaction(
 
     if any(sig["owner"].lower() == signer_address.lower() for sig in signatures):
         raise ValueError("You have already signed this proposal")
+
+    _safe_security_gate(
+        user_id=user_id,
+        wallet_id=signer_wallet["id"],
+        resource_id=tx_id,
+        transaction_value_usd=0.0,
+        authentication_strength=authentication_strength,
+        device_trusted=device_trusted,
+        device_fingerprint=device_fingerprint,
+    )
 
     private_key_hex = get_user_private_key(
         user_id=user_id,
@@ -705,6 +775,9 @@ def execute_safe_transaction(
     user_id: str,
     password: str,
     wallet_id: str = None,
+    authentication_strength=None,
+    device_trusted=None,
+    device_fingerprint=None,
 ) -> dict:
     """Executes a Safe transaction once enough signatures are collected.
     Any owner can trigger execution (they pay the gas for this call) -
@@ -747,6 +820,16 @@ def execute_safe_transaction(
 
     if executor_address.lower() not in [o.lower() for o in owners]:
         raise ValueError("Only an owner of this Safe can execute this proposal")
+
+    _safe_security_gate(
+        user_id=user_id,
+        wallet_id=executor_wallet["id"],
+        resource_id=tx_id,
+        transaction_value_usd=0.0,
+        authentication_strength=authentication_strength,
+        device_trusted=device_trusted,
+        device_fingerprint=device_fingerprint,
+    )
 
     private_key_hex = get_user_private_key(
         user_id=user_id,

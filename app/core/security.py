@@ -63,7 +63,24 @@ def get_current_user(request: Request):
     user_id = payload.get("user_id")
     if not user_id:
         return None
+
+    # Enforce server-side session revocation/expiry.
+    # JWT validity alone must not keep a logged-out session alive.
     from app.core.database import get_db
+    with get_db() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT auth_method, authentication_strength, device_trusted
+                FROM user_sessions
+                WHERE token = %s
+                  AND user_id = %s
+                  AND expires_at > NOW()
+                LIMIT 1
+            """, (token, user_id))
+            session = c.fetchone()
+            if not session:
+                return None
+            session_auth_method, session_auth_strength, session_device_trusted = session
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
@@ -87,5 +104,8 @@ def get_current_user(request: Request):
                 "is_founder": row[8] or False,
                 "device_fingerprint": row[9],
                 "preferred_currency": row[10] or "USD",
-                "profile_picture": row[11] or None
+                "profile_picture": row[11] or None,
+                "auth_method": session_auth_method,
+                "authentication_strength": session_auth_strength,
+                "device_trusted": session_device_trusted
             }

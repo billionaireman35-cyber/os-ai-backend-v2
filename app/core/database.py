@@ -488,6 +488,9 @@ def init_db():
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_reason TEXT")
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decided_at TIMESTAMP")
                 c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_phrase_hash TEXT")
+                c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS auth_method TEXT")
+                c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS authentication_strength INTEGER")
+                c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS device_trusted BOOLEAN")
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS security_events (

@@ -18,6 +18,7 @@ sys.modules.setdefault("app.services.blockchain", blockchain_stub)
 transaction_stub = types.ModuleType("app.services.transaction")
 transaction_stub.sign_transaction = MagicMock()
 transaction_stub.broadcast_transaction = MagicMock()
+transaction_stub.sign_safe_hash = MagicMock()
 sys.modules.setdefault("app.services.transaction", transaction_stub)
 
 coingecko_stub = types.ModuleType("app.services.coingecko_service")

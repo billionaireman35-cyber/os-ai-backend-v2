@@ -92,8 +92,10 @@ async def register(req: RegisterRequest):
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (user_id, req.email, hash_password(req.password), name, req.fingerprint, hash_password(recovery_phrase)))
             token = create_token(user_id)
-            c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
-                      (user_id, token, now_utc() + timedelta(days=30)))
+            c.execute("""INSERT INTO user_sessions
+                (user_id, token, expires_at, auth_method, authentication_strength, device_trusted)
+                VALUES (%s, %s, %s, %s, %s, %s)""",
+                      (user_id, token, now_utc() + timedelta(days=30), "password", 70, False))
             conn.commit()
             return {
                 "token": token,
@@ -131,8 +133,10 @@ async def login(req: LoginRequest):
                 c.execute("UPDATE users SET device_fingerprint = %s, fingerprint_verified = TRUE WHERE id = %s", (req.fingerprint, user_id))
             # REMOVED: any UPDATE users SET close_balance = close_balance + X
             token = create_token(user_id)
-            c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
-                      (user_id, token, now_utc() + timedelta(days=30)))
+            c.execute("""INSERT INTO user_sessions
+                      (user_id, token, expires_at, auth_method, authentication_strength, device_trusted)
+                      VALUES (%s, %s, %s, %s, %s, %s)""",
+                      (user_id, token, now_utc() + timedelta(days=30), "password", 70, False))
             conn.commit()
             return {
                 "token": token,
@@ -208,8 +212,10 @@ async def google_login(req: dict, request: Request):
             user_id, db_email, db_name, close_balance, close_staked, stake_tier, is_founder = row
 
             token = create_token(user_id)
-            c.execute("INSERT INTO user_sessions (user_id, token, expires_at) VALUES (%s, %s, %s)",
-                      (user_id, token, now_utc() + timedelta(days=30)))
+            c.execute("""INSERT INTO user_sessions
+                      (user_id, token, expires_at, auth_method, authentication_strength, device_trusted)
+                      VALUES (%s, %s, %s, %s, %s, %s)""",
+                      (user_id, token, now_utc() + timedelta(days=30), "google", 80, False))
             conn.commit()
 
             return {
