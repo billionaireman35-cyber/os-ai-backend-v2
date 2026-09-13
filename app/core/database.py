@@ -489,6 +489,54 @@ def init_db():
                 c.execute("ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS founder_decided_at TIMESTAMP")
                 c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_phrase_hash TEXT")
 
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS security_events (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                        wallet_id UUID REFERENCES os_wallets(id) ON DELETE SET NULL,
+                        action TEXT NOT NULL,
+                        resource_type TEXT,
+                        resource_id TEXT,
+                        decision TEXT NOT NULL,
+                        risk_score INTEGER DEFAULT 0,
+                        reason_codes JSONB NOT NULL DEFAULT '[]',
+                        ip_address TEXT,
+                        device_fingerprint TEXT,
+                        metadata JSONB NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_security_events_user_created
+                    ON security_events (user_id, created_at DESC)
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_security_events_action_created
+                    ON security_events (action, created_at DESC)
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_security_events_decision_created
+                    ON security_events (decision, created_at DESC)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS security_rate_limits (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        scope TEXT NOT NULL,
+                        subject TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        window_start TIMESTAMP NOT NULL,
+                        request_count INTEGER NOT NULL DEFAULT 0,
+                        blocked_count INTEGER NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (scope, subject, action, window_start)
+                    )
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_security_rate_limits_lookup
+                    ON security_rate_limits (scope, subject, action, window_start DESC)
+                """)
+
                 c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
         logger.info("✅ Database initialized successfully")
