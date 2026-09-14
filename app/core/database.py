@@ -559,6 +559,216 @@ def init_db():
                     ON goldx_company_wallets (purpose, chain, is_active)
                 """)
 
+
+                # Enterprise Safe / Vault monetization foundation.
+                # Additive only: existing customer Safe/wallet tables remain unchanged.
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS organizations (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        name TEXT NOT NULL,
+                        slug TEXT UNIQUE NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS organization_members (
+                        organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        role TEXT NOT NULL DEFAULT 'AUDITOR',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (organization_id, user_id),
+                        CHECK (role IN (
+                            'OWNER',
+                            'ADMIN',
+                            'TREASURY_MANAGER',
+                            'APPROVER',
+                            'OPERATOR',
+                            'AUDITOR'
+                        ))
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_organization_members_user
+                    ON organization_members (user_id, status)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS enterprise_wallets (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        chain TEXT NOT NULL,
+                        address TEXT NOT NULL,
+                        encrypted_key TEXT NOT NULL,
+                        label TEXT DEFAULT 'Enterprise Wallet',
+                        purpose TEXT DEFAULT 'operational',
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (chain, address)
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_enterprise_wallets_lookup
+                    ON enterprise_wallets (organization_id, chain, is_active)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS enterprise_safes (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        chain TEXT NOT NULL,
+                        address TEXT NOT NULL,
+                        owners JSONB NOT NULL,
+                        threshold INTEGER NOT NULL,
+                        label TEXT DEFAULT 'Enterprise Safe',
+                        tx_hash TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (chain, address),
+                        CHECK (threshold > 0)
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_enterprise_safes_org
+                    ON enterprise_safes (organization_id, chain)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS enterprise_policies (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        policy JSONB NOT NULL DEFAULT '{}',
+                        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_enterprise_policies_org
+                    ON enterprise_policies (organization_id, enabled)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS sponsorship_policies (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+                        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                        chain TEXT NOT NULL,
+                        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                        max_gas_per_tx BIGINT,
+                        daily_gas_limit BIGINT,
+                        daily_tx_limit INTEGER,
+                        max_transaction_value_usd NUMERIC(24,8),
+                        max_risk_score INTEGER,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        CHECK (
+                            (organization_id IS NOT NULL AND user_id IS NULL)
+                            OR
+                            (organization_id IS NULL AND user_id IS NOT NULL)
+                        )
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_sponsorship_policies_org
+                    ON sponsorship_policies (organization_id, chain, enabled)
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_sponsorship_policies_user
+                    ON sponsorship_policies (user_id, chain, enabled)
+                """)
+
+                c.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_sponsorship_policy_org_chain
+                    ON sponsorship_policies (organization_id, chain)
+                    WHERE organization_id IS NOT NULL
+                """)
+
+                c.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_sponsorship_policy_user_chain
+                    ON sponsorship_policies (user_id, chain)
+                    WHERE user_id IS NOT NULL
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS vault_fee_transactions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                        organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+                        safe_id UUID REFERENCES safes(id) ON DELETE SET NULL,
+                        enterprise_safe_id UUID REFERENCES enterprise_safes(id) ON DELETE SET NULL,
+                        safe_transaction_id UUID REFERENCES safe_transactions(id) ON DELETE SET NULL,
+                        chain TEXT NOT NULL,
+                        fee_type TEXT NOT NULL,
+                        asset TEXT NOT NULL,
+                        amount NUMERIC(36,18) NOT NULL,
+                        amount_usd NUMERIC(24,8),
+                        destination_wallet TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_vault_fee_transactions_user
+                    ON vault_fee_transactions (user_id, created_at DESC)
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_vault_fee_transactions_org
+                    ON vault_fee_transactions (organization_id, created_at DESC)
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_vault_fee_transactions_safe
+                    ON vault_fee_transactions (safe_id, created_at DESC)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS relayer_executions (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        safe_id UUID REFERENCES safes(id) ON DELETE SET NULL,
+                        enterprise_safe_id UUID REFERENCES enterprise_safes(id) ON DELETE SET NULL,
+                        safe_transaction_id UUID REFERENCES safe_transactions(id) ON DELETE SET NULL,
+                        chain TEXT NOT NULL,
+                        relayer_wallet_id UUID REFERENCES goldx_company_wallets(id) ON DELETE SET NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        estimated_gas BIGINT,
+                        actual_gas BIGINT,
+                        effective_gas_price NUMERIC(36,18),
+                        actual_gas_cost_native NUMERIC(36,18),
+                        actual_gas_cost_usd NUMERIC(24,8),
+                        transaction_hash TEXT,
+                        failure_reason TEXT,
+                        submitted_at TIMESTAMP,
+                        confirmed_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_relayer_executions_safe_tx
+                    ON relayer_executions (safe_transaction_id, created_at DESC)
+                """)
+
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_relayer_executions_status
+                    ON relayer_executions (status, created_at DESC)
+                """)
+
                 c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
         logger.info("✅ Database initialized successfully")
