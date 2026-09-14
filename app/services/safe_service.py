@@ -18,6 +18,11 @@ from eth_utils import to_checksum_address
 from app.core.database import get_db
 from app.core.config import settings, get_safe_singleton, get_safe_proxy_factory
 from app.services.blockchain import get_web3
+from app.services.safe_core import (
+    get_safe_nonce,
+    get_transaction_hash,
+    build_exec_transaction_calldata,
+)
 from app.services.transaction import sign_transaction, broadcast_transaction, sign_safe_hash
 from app.services.wallet_service import get_user_private_key
 from app.services.wallet_identity import require_signing_wallet, resolve_wallet_identity
@@ -439,28 +444,15 @@ def propose_safe_transaction(
         wallet_id=proposer_wallet["id"],
     )
 
-    web3 = get_web3(chain)
-    safe_contract = web3.eth.contract(address=to_checksum_address(safe_address), abi=SAFE_CONTRACT_ABI)
-
-    safe_nonce = safe_contract.functions.nonce().call()
-
-    ZERO = "0x0000000000000000000000000000000000000000"
-    data_bytes = bytes.fromhex(data[2:]) if data.startswith("0x") else bytes.fromhex(data)
-
-    safe_tx_hash = safe_contract.functions.getTransactionHash(
-        to_checksum_address(to_address),
-        value_wei,
-        data_bytes,
-        0,  # operation: 0 = Call (the only kind this app initiates)
-        0,  # safeTxGas: 0 = no manual gas limit override, let execTransaction estimate
-        0,  # baseGas
-        0,  # gasPrice: 0 = no refund/relayer mechanism - proposer/executor pays their own gas
-        ZERO,  # gasToken
-        ZERO,  # refundReceiver
-        safe_nonce,
-    ).call()
-
-    safe_tx_hash_hex = "0x" + safe_tx_hash.hex()
+    safe_nonce = get_safe_nonce(chain, safe_address)
+    safe_tx_hash_hex = get_transaction_hash(
+        chain=chain,
+        safe_address=safe_address,
+        to_address=to_address,
+        value_wei=value_wei,
+        data=data,
+        nonce=safe_nonce,
+    )
     signature_hex = sign_safe_hash(safe_tx_hash_hex, private_key_hex, proposer_address)
 
     tx_id = str(uuid.uuid4())
@@ -837,30 +829,16 @@ def execute_safe_transaction(
         wallet_id=executor_wallet["id"],
     )
 
-    # Concatenate signatures sorted ascending by owner address (required by
-    # the Safe contract's own verification order, not a stylistic choice).
-    sorted_sigs = sorted(signatures, key=lambda s: s["owner"].lower())
-    packed_signatures = "0x" + "".join(sig["signature"][2:] for sig in sorted_sigs)
-
-    web3 = get_web3(chain)
-    safe_contract = web3.eth.contract(address=to_checksum_address(safe_address), abi=SAFE_CONTRACT_ABI)
-
-    ZERO = "0x0000000000000000000000000000000000000000"
-    data_bytes = bytes.fromhex(data[2:]) if data.startswith("0x") else bytes.fromhex(data)
     value_wei = int(value_wei_str)
 
-    exec_calldata = safe_contract.encodeABI(fn_name="execTransaction", args=[
-        to_checksum_address(to_address),
-        value_wei,
-        data_bytes,
-        0,
-        0,
-        0,
-        0,
-        ZERO,
-        ZERO,
-        bytes.fromhex(packed_signatures[2:]),
-    ])
+    exec_calldata = build_exec_transaction_calldata(
+        chain=chain,
+        safe_address=safe_address,
+        to_address=to_address,
+        value_wei=value_wei,
+        data=data,
+        signatures=signatures,
+    )
 
     signed_hex = sign_transaction(
         chain=chain,
