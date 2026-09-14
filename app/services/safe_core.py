@@ -195,6 +195,35 @@ def build_setup_calldata(
     return bytes.fromhex(calldata[2:])
 
 
+def build_proxy_deployment_calldata(
+    chain: str,
+    singleton_address: str,
+    setup_calldata: bytes,
+    salt_nonce: int,
+) -> bytes:
+    configured_singleton, factory = get_safe_addresses(chain)
+
+    if to_checksum_address(singleton_address) != configured_singleton:
+        raise ValueError("Safe singleton does not match configured chain")
+
+    from app.services.blockchain import get_web3
+    web3 = get_web3(chain)
+    contract = web3.eth.contract(
+        address=factory,
+        abi=SAFE_PROXY_FACTORY_ABI,
+    )
+
+    calldata = contract.encodeABI(
+        fn_name="createProxyWithNonce",
+        args=[
+            configured_singleton,
+            setup_calldata,
+            int(salt_nonce),
+        ],
+    )
+    return bytes.fromhex(calldata[2:])
+
+
 def get_safe_nonce(chain: str, safe_address: str) -> int:
     return get_safe_contract(chain, safe_address).functions.nonce().call()
 

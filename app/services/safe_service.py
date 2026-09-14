@@ -22,6 +22,8 @@ from app.services.safe_core import (
     get_safe_nonce,
     get_transaction_hash,
     build_exec_transaction_calldata,
+    build_setup_calldata,
+    build_proxy_deployment_calldata,
 )
 from app.services.transaction import sign_transaction, broadcast_transaction, sign_safe_hash
 from app.services.wallet_service import get_user_private_key
@@ -66,23 +68,6 @@ ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 # Minimal ABI fragments - matches the verified on-chain ABI (confirmed
 # against Etherscan/PolygonScan's own published ABI for the real,
 # deployed Proxy Factory 1.3.0 contract).
-SAFE_SETUP_ABI = [{
-    "inputs": [
-        {"name": "_owners", "type": "address[]"},
-        {"name": "_threshold", "type": "uint256"},
-        {"name": "to", "type": "address"},
-        {"name": "data", "type": "bytes"},
-        {"name": "fallbackHandler", "type": "address"},
-        {"name": "paymentToken", "type": "address"},
-        {"name": "payment", "type": "uint256"},
-        {"name": "paymentReceiver", "type": "address"}
-    ],
-    "name": "setup",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-}]
-
 SAFE_PROXY_FACTORY_ABI = [
     {
         "inputs": [
@@ -220,27 +205,24 @@ def create_safe(
     from_address = wallet["address"]
 
     web3 = get_web3(chain)
-    singleton_contract = web3.eth.contract(address=to_checksum_address(singleton_address), abi=SAFE_SETUP_ABI)
-    factory_contract = web3.eth.contract(address=to_checksum_address(factory_address), abi=SAFE_PROXY_FACTORY_ABI)
+    factory_contract = web3.eth.contract(
+        address=to_checksum_address(factory_address),
+        abi=SAFE_PROXY_FACTORY_ABI,
+    )
 
-    setup_calldata_hex = singleton_contract.encodeABI(fn_name="setup", args=[
-        owners_checksummed,
-        threshold,
-        ZERO_ADDRESS,
-        b"",
-        ZERO_ADDRESS,
-        ZERO_ADDRESS,
-        0,
-        ZERO_ADDRESS,
-    ])
-    setup_calldata_bytes = bytes.fromhex(setup_calldata_hex[2:])
+    setup_calldata_bytes = build_setup_calldata(
+        chain=chain,
+        owners=owners_checksummed,
+        threshold=threshold,
+    )
 
     salt_nonce = int(time.time() * 1000)
-    deploy_calldata = factory_contract.encodeABI(fn_name="createProxyWithNonce", args=[
-        to_checksum_address(singleton_address),
-        setup_calldata_bytes,
-        salt_nonce,
-    ])
+    deploy_calldata = build_proxy_deployment_calldata(
+        chain=chain,
+        singleton_address=singleton_address,
+        setup_calldata=setup_calldata_bytes,
+        salt_nonce=salt_nonce,
+    )
 
     debug_balance = web3.eth.get_balance(to_checksum_address(from_address))
     print(f"SAFE_DEPLOY_DEBUG from_address={from_address} chain={chain} balance_wei={debug_balance}", flush=True)
