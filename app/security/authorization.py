@@ -1,5 +1,6 @@
 from app.security.types import SecurityAction, SecurityContext, SecurityDecision, SecurityResult
 from app.security.policy import block
+from app.core.database import get_db
 FINANCIAL_ACTIONS = frozenset({
     SecurityAction.WALLET_SIGN.value,
     SecurityAction.TRANSACTION.value,
@@ -19,6 +20,46 @@ def authorize(context: SecurityContext) -> SecurityResult:
     if action in FINANCIAL_ACTIONS:
         if not context.wallet_id:
             return block("unauthorized")
+
+        if context.resource_type == "goldx_company_wallet":
+            purpose = context.metadata.get("goldx_purpose")
+            if not purpose:
+                return block("unauthorized")
+
+            try:
+                with get_db() as conn:
+                    with conn.cursor() as c:
+                        c.execute("""
+                            SELECT u.is_founder, u.stake_tier, w.purpose, w.is_active
+                            FROM users u
+                            JOIN goldx_company_wallets w ON w.id = %s::uuid
+                            WHERE u.id = %s
+                            LIMIT 1
+                        """, (context.wallet_id, context.user_id))
+                        row = c.fetchone()
+            except Exception:
+                return block("unauthorized")
+
+            if not row:
+                return block("unauthorized")
+
+            is_founder, stake_tier, wallet_purpose, is_active = row
+
+            if not is_founder and stake_tier != "founder":
+                return block("unauthorized")
+
+            if not is_active or wallet_purpose != purpose:
+                return block("unauthorized")
+
+            return SecurityResult(
+                decision=SecurityDecision.ALLOW,
+                metadata={
+                    "wallet_type": "goldx_company",
+                    "wallet_authorized": True,
+                    "goldx_purpose": wallet_purpose,
+                },
+            )
+
         from app.services.wallet_identity import resolve_wallet_identity
         try:
             wallet = resolve_wallet_identity(

@@ -540,6 +540,25 @@ def init_db():
                     ON security_rate_limits (scope, subject, action, window_start DESC)
                 """)
 
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS goldx_company_wallets (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        purpose TEXT NOT NULL,
+                        chain TEXT NOT NULL,
+                        address TEXT NOT NULL,
+                        encrypted_key TEXT NOT NULL,
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (purpose, chain),
+                        UNIQUE (address)
+                    )
+                """)
+                c.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_goldx_company_wallets_purpose
+                    ON goldx_company_wallets (purpose, chain, is_active)
+                """)
+
                 c.execute("SELECT pg_advisory_unlock(918273645)")
                 conn.commit()
         logger.info("✅ Database initialized successfully")

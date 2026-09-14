@@ -61,7 +61,7 @@ class Settings(BaseSettings):
 
     BURN_PER_MESSAGE: int = 25
     SANDBOX_BURN_AMOUNT: int = 250
-    FREE_CLOSE_AMOUNT: int = 500
+    FREE_CLOSE_AMOUNT: int = 300
     GAS_REFILL_THRESHOLD_POL: float = 0.5
     GAS_REFILL_CLOSE_AMOUNT: float = 200
     SWAP_FEE_PERCENT: float = 0.75
