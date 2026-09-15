@@ -52,11 +52,17 @@ def verify_token(token: str):
     except:
         return None
 
-def get_current_user(request: Request):
+def get_current_session_token(request: Request):
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
-    token = auth[7:]
+    return auth[7:].strip() or None
+
+
+def get_current_user(request: Request):
+    token = get_current_session_token(request)
+    if not token:
+        return None
     payload = verify_token(token)
     if not payload or payload.get("type") != "user":
         return None
@@ -70,7 +76,8 @@ def get_current_user(request: Request):
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
-                SELECT auth_method, authentication_strength, device_trusted
+                SELECT auth_method, authentication_strength, device_trusted,
+                       step_up_expires_at
                 FROM user_sessions
                 WHERE token = %s
                   AND user_id = %s
@@ -80,7 +87,7 @@ def get_current_user(request: Request):
             session = c.fetchone()
             if not session:
                 return None
-            session_auth_method, session_auth_strength, session_device_trusted = session
+            session_auth_method, session_auth_strength, session_device_trusted, step_up_expires_at = session
     with get_db() as conn:
         with conn.cursor() as c:
             c.execute("""
@@ -92,6 +99,14 @@ def get_current_user(request: Request):
             row = c.fetchone()
             if not row:
                 return None
+            effective_auth_strength = session_auth_strength
+            if step_up_expires_at is not None:
+                expiry = step_up_expires_at
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry > now_utc():
+                    effective_auth_strength = 100
+
             return {
                 "id": row[0],
                 "email": row[1],
@@ -106,6 +121,7 @@ def get_current_user(request: Request):
                 "preferred_currency": row[10] or "USD",
                 "profile_picture": row[11] or None,
                 "auth_method": session_auth_method,
-                "authentication_strength": session_auth_strength,
-                "device_trusted": session_device_trusted
+                "authentication_strength": effective_auth_strength,
+                "device_trusted": session_device_trusted,
+                "step_up_expires_at": step_up_expires_at,
             }

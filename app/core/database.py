@@ -491,6 +491,7 @@ def init_db():
                 c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS auth_method TEXT")
                 c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS authentication_strength INTEGER")
                 c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS device_trusted BOOLEAN")
+                c.execute("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS step_up_expires_at TIMESTAMP")
 
                 c.execute("""
                     CREATE TABLE IF NOT EXISTS security_events (
@@ -538,6 +539,19 @@ def init_db():
                 c.execute("""
                     CREATE INDEX IF NOT EXISTS idx_security_rate_limits_lookup
                     ON security_rate_limits (scope, subject, action, window_start DESC)
+                """)
+
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS security_passcodes (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        verifier TEXT NOT NULL,
+                        failed_attempts INTEGER DEFAULT 0,
+                        locked_until TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        last_used_at TIMESTAMP
+                    )
                 """)
 
                 c.execute("""

@@ -1,5 +1,5 @@
 """Crypto deposit verification. Users submit a tx_hash claiming they paid
-settings.DEPOSIT_ADDRESS; this module verifies that on-chain before crediting
+This module resolves the active Goldx Revenue wallet and verifies deposits against that configured destination.
 CLOSE. Prices fetched directly from CoinGecko's public API (no API key
 needed for this endpoint, rate-limited but fine at low volume).
 """
@@ -8,6 +8,7 @@ import logging
 from eth_utils import to_checksum_address
 from app.services.blockchain import get_web3
 from app.core.config import settings
+from app.services.goldx_wallet_service import GoldxWalletPurpose, get_company_wallet
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,11 @@ def verify_and_credit_deposit(user_id: str, chain: str, tx_hash: str) -> dict:
                 raise ValueError("This transaction has already been credited")
 
     web3 = get_web3(chain)
-    deposit_address = to_checksum_address(settings.DEPOSIT_ADDRESS)
+    revenue_wallet = get_company_wallet(
+        purpose=GoldxWalletPurpose.REVENUE,
+        chain=chain,
+    )
+    deposit_address = to_checksum_address(revenue_wallet["address"])
 
     receipt = web3.eth.get_transaction_receipt(tx_hash)
     if receipt.status != 1:

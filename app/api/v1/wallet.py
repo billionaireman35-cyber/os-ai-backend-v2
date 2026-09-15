@@ -8,6 +8,7 @@ from app.services.wallet_service import (
     get_user_private_key
 )
 from app.services.deposit_service import verify_and_credit_deposit
+from app.services.fx_service import get_commercial_fx_quote
 import uuid as uuid_lib
 from app.core.database import get_db
 import uuid
@@ -129,6 +130,41 @@ async def export_private_key(
 
 
 
+@router.get("/close/quote")
+async def close_purchase_quote(
+    currency: str = Query("USD"),
+    user=Depends(get_current_user),
+):
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    currency = currency.upper().strip()
+
+    try:
+        fx = get_commercial_fx_quote(currency)
+        usd_price = float(settings.CLOSE_USD_PRICE)
+        local_price = usd_price * fx["rate"]
+
+        return {
+            "symbol": "CLOSE",
+            "usd_price": usd_price,
+            "currency": currency,
+            "price": round(local_price, 8),
+            "fx_rate": fx["rate"],
+            "rate_source": fx["source"],
+            "rate_timestamp": fx["rate_timestamp"],
+            "stale": fx["stale"],
+            "age_seconds": fx.get("age_seconds"),
+        }
+    except ValueError as e:
+        raise HTTPException(503, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        logger.error(f"CLOSE purchase quote failed: {e}")
+        raise HTTPException(503, "Live pricing is temporarily unavailable")
+
+
 @router.post("/deposit/verify")
 async def verify_deposit(
     chain: str = Body(..., embed=True),
@@ -148,14 +184,26 @@ async def verify_deposit(
 
 @router.get("/deposit/info")
 async def deposit_info():
+    addresses = {}
+
+    for chain in ("polygon", "ethereum", "bsc"):
+        try:
+            addresses[chain] = get_company_wallet(
+                purpose=GoldxWalletPurpose.REVENUE,
+                chain=chain,
+            )["address"]
+        except ValueError:
+            addresses[chain] = None
+
     return {
-        "address": settings.DEPOSIT_ADDRESS,
+        "addresses": addresses,
         "minimums": {
             "polygon": settings.DEPOSIT_MIN_USD_POLYGON,
             "bsc": settings.DEPOSIT_MIN_USD_BSC,
             "ethereum": settings.DEPOSIT_MIN_USD_ETHEREUM,
         },
-        "close_per_usd": settings.CLOSE_PER_USD
+        "close_per_usd": settings.CLOSE_PER_USD,
+        "close_usd_price": settings.CLOSE_USD_PRICE
     }
 
 @router.post("/withdraw/request")

@@ -13,6 +13,8 @@ AUDIT_METADATA_KEYS = frozenset({
     "policy_version",
     "wallet_type",
     "transaction_type",
+    "method",
+    "elevation_seconds",
 })
 
 

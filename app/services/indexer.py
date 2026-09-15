@@ -5,6 +5,7 @@ from typing import Dict, Set, Optional
 from web3 import Web3
 from web3.middleware import geth_poa_middleware
 from app.core.config import settings
+from app.services.goldx_wallet_service import GoldxWalletPurpose, get_company_wallet
 from app.core.database import get_db
 from app.services.blockchain import get_web3
 
@@ -156,6 +157,18 @@ class ChainIndexer:
                 for row in cur.fetchall():
                     if row[0]:
                         addresses.add(to_checksum_address(row[0]))
+        try:
+            revenue_wallet = get_company_wallet(
+                purpose=GoldxWalletPurpose.REVENUE,
+                chain=self.chain,
+            )
+            addresses.add(to_checksum_address(revenue_wallet["address"]))
+        except ValueError:
+            logger.warning(
+                f"No active Goldx Revenue wallet configured for {self.chain}"
+            )
+
+        # Keep the legacy deposit address watched during migration.
         if settings.DEPOSIT_ADDRESS:
             addresses.add(to_checksum_address(settings.DEPOSIT_ADDRESS))
         self.watched_addresses = addresses

@@ -16,7 +16,7 @@ def calculate_risk(signals: RiskSignals) -> tuple[int, tuple[str, ...]]:
     score = 0
     reasons: list[str] = []
 
-    if signals.device_trusted is not True:
+    if signals.device_trusted is not True and signals.authentication_strength != 100:
         score += 25
         reasons.append(
             "untrusted_device"

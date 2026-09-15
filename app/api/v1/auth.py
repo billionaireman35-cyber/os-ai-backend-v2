@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, Body, Body
 from app.models.schemas import SendCodeRequest, VerifyCodeRequest, RegisterRequest, LoginRequest, RecoverPasswordRequest
 from app.core.database import get_db
-from app.core.security import create_token, verify_password, hash_password, now_utc, get_current_user
+from app.core.security import create_token, verify_password, hash_password, now_utc, get_current_user, get_current_session_token
 from app.services.email import send_verification_email
 from app.core.config import settings
 import re, uuid, hmac, secrets, string, asyncio, logging
@@ -230,6 +230,220 @@ async def google_login(req: dict, request: Request):
                     "is_founder": is_founder,
                 }
             }
+
+
+
+@router.post("/step-up")
+async def step_up_authentication(req: dict, request: Request):
+    """Temporarily elevate authentication assurance for the current session."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Authentication required")
+
+    from hashlib import sha256
+    from app.security.rate_limit import check_rate_limit
+    from app.security.types import SecurityAction, SecurityDecision
+    from app.security.audit import record_security_event
+
+    token = get_current_session_token(request)
+    if not token:
+        raise HTTPException(401, "Authentication required")
+
+    session_subject = sha256(token.encode()).hexdigest()
+    action = SecurityAction.AUTHENTICATION_STEP_UP.value
+    ip_address = request.client.host if request.client else None
+    device_fingerprint = user.get("device_fingerprint")
+
+    rate = check_rate_limit(
+        "session",
+        session_subject,
+        action,
+        5,
+        600,
+    )
+    if not rate.allowed:
+        record_security_event(
+            action=action,
+            decision=SecurityDecision.BLOCK.value,
+            reason_codes=("rate_limit_exceeded",),
+            user_id=str(user["id"]),
+            resource_type="session",
+            resource_id=session_subject,
+            ip_address=ip_address,
+            device_fingerprint=device_fingerprint,
+        )
+        raise HTTPException(
+            429,
+            f"Step-up authentication temporarily blocked; retry after {rate.retry_after_seconds}s",
+        )
+
+    method = user.get("auth_method")
+
+    try:
+        if "passcode" in req:
+            passcode = req.get("passcode")
+            if not passcode:
+                raise HTTPException(400, "Passcode required")
+
+            from app.security.passcode import (
+                verify_passcode,
+                PasscodeInvalid,
+                PasscodeLocked,
+            )
+
+            try:
+                verify_passcode(str(user["id"]), passcode)
+            except (PasscodeInvalid, PasscodeLocked):
+                record_security_event(
+                    action=action,
+                    decision=SecurityDecision.BLOCK.value,
+                    reason_codes=("invalid_step_up_credentials",),
+                    user_id=str(user["id"]),
+                    resource_type="session",
+                    resource_id=session_subject,
+                    ip_address=ip_address,
+                    device_fingerprint=device_fingerprint,
+                    metadata={"method": "passcode"},
+                )
+                raise HTTPException(401, "Invalid step-up credentials")
+
+            method = "passcode"
+
+        elif method == "password":
+            password = req.get("password")
+            if not password:
+                raise HTTPException(400, "Password required")
+
+            with get_db() as conn:
+                with conn.cursor() as c:
+                    c.execute(
+                        "SELECT password_hash FROM users WHERE id = %s",
+                        (user["id"],),
+                    )
+                    row = c.fetchone()
+
+            if not row or not row[0] or not verify_password(password, row[0]):
+                record_security_event(
+                    action=action,
+                    decision=SecurityDecision.BLOCK.value,
+                    reason_codes=("invalid_step_up_credentials",),
+                    user_id=str(user["id"]),
+                    resource_type="session",
+                    resource_id=session_subject,
+                    ip_address=ip_address,
+                    device_fingerprint=device_fingerprint,
+                    metadata={"method": "password"},
+                )
+                raise HTTPException(401, "Invalid step-up credentials")
+
+        elif method == "google":
+            credential = req.get("credential")
+            if not credential:
+                raise HTTPException(400, "Google credential required")
+
+            try:
+                idinfo = google_id_token.verify_oauth2_token(
+                    credential,
+                    google_requests.Request(),
+                    settings.GOOGLE_CLIENT_ID,
+                )
+            except ValueError:
+                record_security_event(
+                    action=action,
+                    decision=SecurityDecision.BLOCK.value,
+                    reason_codes=("invalid_google_credential",),
+                    user_id=str(user["id"]),
+                    resource_type="session",
+                    resource_id=session_subject,
+                    ip_address=ip_address,
+                    device_fingerprint=device_fingerprint,
+                    metadata={"method": "google"},
+                )
+                raise HTTPException(401, "Invalid Google credential")
+
+            google_sub = idinfo.get("sub")
+            if not google_sub or not idinfo.get("email_verified", False):
+                record_security_event(
+                    action=action,
+                    decision=SecurityDecision.BLOCK.value,
+                    reason_codes=("invalid_google_authentication",),
+                    user_id=str(user["id"]),
+                    resource_type="session",
+                    resource_id=session_subject,
+                    ip_address=ip_address,
+                    device_fingerprint=device_fingerprint,
+                    metadata={"method": "google"},
+                )
+                raise HTTPException(401, "Invalid Google authentication")
+
+            with get_db() as conn:
+                with conn.cursor() as c:
+                    c.execute(
+                        "SELECT google_id FROM users WHERE id = %s",
+                        (user["id"],),
+                    )
+                    row = c.fetchone()
+
+            if not row or not row[0] or not hmac.compare_digest(str(row[0]), str(google_sub)):
+                record_security_event(
+                    action=action,
+                    decision=SecurityDecision.BLOCK.value,
+                    reason_codes=("google_account_mismatch",),
+                    user_id=str(user["id"]),
+                    resource_type="session",
+                    resource_id=session_subject,
+                    ip_address=ip_address,
+                    device_fingerprint=device_fingerprint,
+                    metadata={"method": "google"},
+                )
+                raise HTTPException(401, "Google account does not match this session")
+
+        else:
+            raise HTTPException(400, "Unsupported authentication method")
+
+        expires_at = now_utc() + timedelta(minutes=10)
+
+        with get_db() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    """
+                    UPDATE user_sessions
+                    SET step_up_expires_at = %s
+                    WHERE token = %s
+                      AND user_id = %s
+                      AND expires_at > NOW()
+                    """,
+                    (expires_at, token, user["id"]),
+                )
+                if c.rowcount != 1:
+                    raise HTTPException(401, "Session is no longer valid")
+                conn.commit()
+
+        record_security_event(
+            action=action,
+            decision=SecurityDecision.ALLOW.value,
+            user_id=str(user["id"]),
+            resource_type="session",
+            resource_id=session_subject,
+            ip_address=ip_address,
+            device_fingerprint=device_fingerprint,
+            metadata={
+                "method": method,
+                "elevation_seconds": 600,
+            },
+        )
+
+        return {
+            "success": True,
+            "authentication_strength": 100,
+            "step_up_expires_at": expires_at.isoformat(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Step-up authentication failed")
+        raise HTTPException(500, "Step-up authentication failed")
 
 
 @router.post("/logout")

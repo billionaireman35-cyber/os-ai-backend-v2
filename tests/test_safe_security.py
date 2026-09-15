@@ -17,7 +17,7 @@ sys.modules.setdefault("app.services.blockchain", blockchain_stub)
 transaction_stub = types.ModuleType("app.services.transaction")
 transaction_stub.sign_transaction = MagicMock()
 transaction_stub.broadcast_transaction = MagicMock()
-transaction_stub.sign_safe_hash = MagicMock()
+transaction_stub.sign_safe_hash = MagicMock(return_value="0x" + "11" * 64 + "1b")
 sys.modules.setdefault("app.services.transaction", transaction_stub)
 
 coingecko_stub = types.ModuleType("app.services.coingecko_service")
@@ -155,7 +155,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
             # this authorization regression test.
             with patch.object(
                 safe_service,
-                "get_web3",
+                "get_safe_nonce",
                 side_effect=RuntimeError("stop-after-identity"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "stop-after-identity"):
@@ -224,7 +224,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                 (
                     SAFE_ID,
                     "0xhash",
-                    [{"owner": ADDRESS_A, "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}],
+                    [{"owner": ADDRESS_A, "signature": "0x111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b"}],
                     "pending",
                     USER_A,
                     [ADDRESS_A, ADDRESS_B],
@@ -327,7 +327,7 @@ class SafeWalletAuthorizationTests(unittest.TestCase):
                     "1",
                     "0x",
                     0,
-                    [{"owner": ADDRESS_A, "signature": "0x1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}],
+                    [{"owner": ADDRESS_A, "signature": "0x" + "11" * 64 + "1b"}],
                     "pending",
                     USER_A,
                     "0xhash",

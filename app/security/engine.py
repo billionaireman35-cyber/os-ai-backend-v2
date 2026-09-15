@@ -34,6 +34,7 @@ ACTION_RATE_LIMITS: dict[str, RateLimitPolicy] = {
     SecurityAction.CLOSE_TRANSFER.value: RateLimitPolicy(5, 60),
     SecurityAction.WITHDRAWAL.value: RateLimitPolicy(5, 60),
     SecurityAction.AI_REQUEST.value: RateLimitPolicy(30, 60),
+    SecurityAction.AUTHENTICATION_STEP_UP.value: RateLimitPolicy(5, 600),
 }
 
 
@@ -43,6 +44,10 @@ def _action_value(action: SecurityAction | str) -> str:
 
 SUPPORTED_ACTIONS = frozenset(item.value for item in SecurityAction)
 
+
+SESSION_SCOPED_ACTIONS = frozenset({
+    SecurityAction.AUTHENTICATION_STEP_UP.value,
+})
 
 WALLET_SCOPED_ACTIONS = frozenset({
     SecurityAction.WALLET_SIGN.value,
@@ -57,6 +62,9 @@ def _rate_limit_scope(
     action: str,
     context: SecurityContext,
 ) -> tuple[str, str]:
+    if action in SESSION_SCOPED_ACTIONS and context.resource_id:
+        return "session", context.resource_id
+
     if action in WALLET_SCOPED_ACTIONS and context.wallet_id:
         return "user_wallet", f"{context.user_id}:{context.wallet_id}"
 

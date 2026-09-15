@@ -13,6 +13,7 @@ class SecurityAction(str, Enum):
     CLOSE_TRANSFER = "close_transfer"
     WITHDRAWAL = "withdrawal"
     AI_REQUEST = "ai_request"
+    AUTHENTICATION_STEP_UP = "authentication_step_up"
 
 
 class SecurityDecision(str, Enum):
